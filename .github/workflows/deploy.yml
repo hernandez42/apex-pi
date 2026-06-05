@@ -55,31 +55,6 @@ jobs:
         run: |
           flyctl version
           echo "FLY_APP = ${{ vars.FLY_APP || 'apex-pi' }}"
-          echo "Token length: ${#FLY_API_TOKEN}"
-          # Hex dump the first 160 bytes to see structure
-          printf '%s' "$FLY_API_TOKEN" | head -c 160 | od -An -c | head -10
-          echo "---"
-          # Show the chunks separated by likely delimiters (space, newline, =, |, ,)
-          for delim in ' ' '\n' '=' '|' ','; do
-            count=$(printf '%s' "$FLY_API_TOKEN" | tr "$delim" '\n' | wc -l)
-            echo "Delim [$delim] -> $count chunks"
-          done
-          # Try truncating to plausible token lengths
-          for len in 60 62 64 70 100; do
-            truncated=$(printf '%s' "$FLY_API_TOKEN" | head -c $len)
-            HTTP_CODE=$(curl -sS -o /tmp/whoami.json -w "%{http_code}" \
-              -H "Authorization: Bearer ${truncated}" \
-              -H "Content-Type: application/json" \
-              -X POST \
-              -d '{"query":"{ viewer { email } }"}' \
-              https://api.fly.io/graphql)
-            first_err=$(head -c 200 /tmp/whoami.json)
-            echo "len=$len HTTP=$HTTP_CODE body=$first_err"
-            if [ "$HTTP_CODE" = "200" ] && ! grep -q UNAUTHORIZED /tmp/whoami.json; then
-              echo "WINNER at length $len"
-              break
-            fi
-          done
           flyctl apps list --json | head -c 500 || true
 
       - name: Ensure the app exists
