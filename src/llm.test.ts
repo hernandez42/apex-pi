@@ -71,7 +71,13 @@ test("resolveModel maps other friendly aliases (openai_compatible, oai)", async 
 test("resolveModel falls back to openai/gpt-4o-mini on unknown provider", async () => {
   process.env.LLM_PROVIDER = "definitely-not-a-real-provider";
   const { resolveModel } = await import("./llm.ts");
+  const { getModel } = await import("@earendil-works/pi-ai");
+  const raw = getModel("definitely-not-a-real-provider" as never, "gpt-4o-mini" as never);
+  // eslint-disable-next-line no-console
+  console.log("DEBUG raw getModel result:", typeof raw, raw === undefined ? "undefined" : raw === null ? "null" : "object");
   const m = resolveModel();
+  // eslint-disable-next-line no-console
+  console.log("DEBUG resolveModel result:", typeof m, m === undefined ? "undefined" : m === null ? "null" : "object");
   expect(m).toBeDefined();
   expect(m.api).toBeTruthy();
   expect(m.id).toBe("gpt-4o-mini");
