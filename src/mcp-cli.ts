@@ -4,7 +4,7 @@
 // line-based stdio mode.
 
 import { Hono } from "hono";
-import { boot, shutdown } from "./bootstrap.ts";
+import { boot, fullShutdown } from "./bootstrap.ts";
 import { config } from "./config.ts";
 import { log } from "./log.ts";
 import { handleMcp } from "./mcp/server.ts";
@@ -22,7 +22,7 @@ async function main() {
   const stop = async (sig: NodeJS.Signals) => {
     log.info("apex-mcp shutting down", { sig });
     try { server.stop(); } catch (e) { log.warn("server.stop threw", { err: String(e) }); }
-    try { await shutdown(); } catch (e) { log.warn("shutdown threw", { err: String(e) }); }
+    try { await fullShutdown(); } catch (e) { log.warn("fullShutdown threw", { err: String(e) }); }
     process.exit(0);
   };
   process.on("SIGINT", stop);

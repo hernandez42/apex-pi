@@ -44,6 +44,13 @@ export interface Config {
   };
   mcp: { enabled: boolean; mountPath: string };
   skills: { dir?: string };
+  workflows: {
+    enabled: boolean;
+    databaseUrl?: string;
+    queueName: string;
+    concurrency: number;
+    claimTimeoutSec: number;
+  };
 }
 
 function envBool(v: string | undefined, dflt: boolean): boolean {
@@ -135,6 +142,13 @@ export function loadConfig(): Config {
       mountPath: envStr(process.env.MCP_MOUNT_PATH, "/mcp"),
     },
     skills: { dir: process.env.SKILLS_DIR },
+    workflows: {
+      enabled: envBool(process.env.ABSURD_ENABLED, false) && !!process.env.ABSURD_DATABASE_URL,
+      databaseUrl: process.env.ABSURD_DATABASE_URL,
+      queueName: envStr(process.env.ABSURD_QUEUE, "apex_pi_default"),
+      concurrency: envInt(process.env.ABSURD_CONCURRENCY, 2),
+      claimTimeoutSec: envInt(process.env.ABSURD_CLAIM_TIMEOUT, 300),
+    },
   };
 }
 

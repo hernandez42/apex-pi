@@ -48,6 +48,15 @@ export function shutdown(): void {
   dreamer = undefined;
 }
 
+/** Full teardown including the (async) workflow engine. Use this from
+ *  long-lived entry points (HTTP server, CLI main). Tests can stick to
+ *  the sync {@link shutdown} since they never start the workflow engine. */
+export async function fullShutdown(): Promise<void> {
+  shutdown();
+  const { stopWorkflows } = await import("./workflows.ts");
+  await stopWorkflows().catch((e) => log.warn("workflows.shutdown.fail", { err: (e as Error).message }));
+}
+
 export function getStore(): MemoryStore | undefined {
   return ctx?.store;
 }

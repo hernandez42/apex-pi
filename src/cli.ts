@@ -7,7 +7,7 @@
 
 import { config } from "./config.ts";
 import { log } from "./log.ts";
-import { boot, shutdown } from "./bootstrap.ts";
+import { boot, fullShutdown } from "./bootstrap.ts";
 import { getMemoryEngine } from "./memory/index.ts";
 import { getAgent } from "./agent.ts";
 import { getCodegraph } from "./codegraph/index.ts";
@@ -39,23 +39,21 @@ Environment:
 
 async function startHttp(): Promise<void> {
   boot();
+  const { startWorkflows } = await import("./workflows.ts");
+  await startWorkflows();
   const { createApp } = await import("./http/server.ts");
   const cfg = config().http;
   const app = createApp();
   const server = Bun.serve({ port: cfg.port, hostname: cfg.host, fetch: app.fetch });
   log.info("http.listening", { port: server.port, url: `http://${cfg.host}:${server.port}` });
-  process.on("SIGINT", () => {
-    log.info("http.shutdown", { sig: "SIGINT" });
+  const stop = async (sig: string) => {
+    log.info("http.shutdown", { sig });
     server.stop();
-    shutdown();
+    await fullShutdown();
     setTimeout(() => process.exit(0), 200).unref();
-  });
-  process.on("SIGTERM", () => {
-    log.info("http.shutdown", { sig: "SIGTERM" });
-    server.stop();
-    shutdown();
-    setTimeout(() => process.exit(0), 200).unref();
-  });
+  };
+  process.on("SIGINT", () => void stop("SIGINT"));
+  process.on("SIGTERM", () => void stop("SIGTERM"));
   // Keep the process alive.
   await new Promise<never>(() => {});
 }
@@ -189,5 +187,5 @@ const code = await main().catch((e) => {
   log.error("cli.fatal", { err: (e as Error).message, stack: (e as Error).stack });
   return 1;
 });
-shutdown();
+await fullShutdown();
 process.exit(code);

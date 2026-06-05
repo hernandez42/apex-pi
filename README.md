@@ -105,6 +105,10 @@ HTTP API (subset):
 | GET    | `/v1/codegraph/search?q=`     | symbol search                                  |
 | GET    | `/v1/codegraph/impact?id=`    | blast-radius impact                            |
 | POST   | `/v1/feishu/webhook`          | Feishu event subscription (webhook transport)  |
+| GET    | `/v1/workflows`               | list registered durable workflows              |
+| POST   | `/v1/workflows/understand`    | spawn a durable `/understand` workflow         |
+| GET    | `/v1/workflows/:id`           | poll workflow state                            |
+| POST   | `/v1/workflows/:id/cancel`    | cancel a running workflow                      |
 | POST   | `/mcp`                        | MCP Streamable HTTP server                     |
 
 ---
@@ -156,6 +160,58 @@ TOTAL                      133 MB
 free                        123 MB
 ```
 
+> The Absurd SDK is **opt-in**: when `ABSURD_DATABASE_URL` is unset, the
+> engine and its `pg` dependency are not loaded and the 256 MB budget
+> above holds verbatim. Enabling workflows adds ~8 MB (pg pool idle).
+
+---
+
+## 🔁 Durable workflows (optional)
+
+Long-running operations can be wrapped as durable workflows backed by
+[earendil-works/absurd](https://github.com/earendil-works/absurd) — a
+Postgres-native durable execution engine. Each phase becomes a
+checkpoint, so a process crash mid-run does not lose work: the worker
+resumes from the last completed phase on the next start.
+
+Currently wrapped:
+* `/v1/workflows/understand` — 3-step `scan → analyse → explain` pipeline.
+  The expensive `codegraph.index` and the LLM call are individually
+  checkpointed.
+
+Setup:
+
+```bash
+# 1. One-time: initialise the schema and create a queue
+absurdctl init
+absurdctl create-queue apex_pi_default
+
+# 2. Point apex-pi at the database
+export ABSURD_ENABLED=1
+export ABSURD_DATABASE_URL=postgres://user:pass@host:5432/apex_pi
+export ABSURD_QUEUE=apex_pi_default
+export ABSURD_CONCURRENCY=2
+export ABSURD_CLAIM_TIMEOUT=300
+
+# 3. Spawn a durable workflow
+curl -X POST http://localhost:8080/v1/workflows/understand \
+  -H 'content-type: application/json' \
+  -d '{"path": "./src", "graph_only": false}'
+
+# → {"mode":"durable","task_id":"understand-a1b2c3","queue":"apex_pi_default",...}
+
+# 4. Poll until done
+curl http://localhost:8080/v1/workflows/understand-a1b2c3
+# → {"task_id":"understand-a1b2c3","state":"completed","result":{...}}
+
+# 5. Cancel a stuck workflow
+curl -X POST http://localhost:8080/v1/workflows/understand-a1b2c3/cancel
+```
+
+The HTTP routes are **always mounted**: when the engine is disabled they
+return `503` with a hint to set `ABSURD_DATABASE_URL`. Clients can poll
+unconditionally.
+
 ---
 
 ## 📁 Layout
@@ -180,6 +236,11 @@ apex-pi/
 │   ├── memory/               # apex-mem: SQLite FTS5 + graph + dreaming
 │   ├── codegraph/            # regex symbol index
 │   ├── understand/           # 5-phase pipeline
+│   ├── workflows.ts          # Absurd durable engine (opt-in)
+│   ├── workflows/
+│   │   ├── handlers.ts       # registered task handlers
+│   │   ├── understand.ts     # spawn helper
+│   │   └── api.ts            # /v1/workflows routes
 │   ├── skills/               # INSTINCTS + same-process SKILLS map
 │   ├── log.ts
 │   ├── json.ts

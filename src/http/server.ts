@@ -16,6 +16,7 @@ import { isAbsolute, resolve } from "node:path";
 import { systemPrompt } from "../skills/index.ts";
 import { createFeishuMom } from "../channels/feishu.ts";
 import { handleMcp } from "../mcp/server.ts";
+import { mountWorkflows } from "../workflows/api.ts";
 import type { MemoryDimension } from "../memory/types.ts";
 
 export function createApp(): Hono {
@@ -198,6 +199,12 @@ export function createApp(): Hono {
   // ─── MCP (Streamable HTTP) ─────────────────────────────────────────
   app.all(`${config().mcp.mountPath}/*`, (c) => handleMcp(c.req.raw));
   app.all(config().mcp.mountPath, (c) => handleMcp(c.req.raw));
+
+  // ─── durable workflows (absurd) ────────────────────────────────────
+  // Always mounted — endpoints return 503 when the engine is disabled
+  // (ABSURD_DATABASE_URL not set). This keeps the route table stable
+  // for clients that always poll /v1/workflows.
+  mountWorkflows(app);
 
   return app;
 }
