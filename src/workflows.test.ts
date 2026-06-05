@@ -55,6 +55,11 @@ interface FakeClient {
   cancelTask: (id: string, queue?: string) => Promise<void>;
   startWorker: (opts?: unknown) => Promise<{ close: () => Promise<void>; opts: unknown }>;
   close: () => Promise<void>;
+  registerTask: <P = unknown, R = unknown>(
+    opts: { name: string; queue?: string; defaultMaxAttempts?: number },
+    handler: (params: P, ctx: unknown) => Promise<R>,
+  ) => void;
+  createQueue: (queueName?: string) => Promise<void>;
   createQueueCalls: string[];
 }
 
@@ -67,19 +72,33 @@ function makeFakeClient(): FakeClient {
     queueName: "",
     handlers,
     createQueueCalls: [],
+    registerTask: (opts, handler) => {
+      handlers.set(opts.name, handler as never);
+    },
+    createQueue: async (queueName) => {
+      client.createQueueCalls.push(queueName ?? client.queueName);
+    },
     spawn: async (name, params) => {
       const id = `${name}-${Math.random().toString(36).slice(2, 8)}`;
       tasks.set(id, { state: "pending" });
-      // Simulate the worker picking the task up synchronously.
+      // Simulate the worker picking the task up asynchronously.
       const handler = handlers.get(name);
       if (handler) {
         void (async () => {
           try {
             const ctx = makeFakeCtx(id);
             const result = await handler(params, ctx);
-            tasks.set(id, { state: "completed", result });
+            // Respect cancellation: if the task was cancelled while the
+            // handler was running, do not overwrite the terminal state.
+            const cur = tasks.get(id);
+            if (cur && cur.state !== "cancelled") {
+              tasks.set(id, { state: "completed", result });
+            }
           } catch (e) {
-            tasks.set(id, { state: "failed", failure: { message: (e as Error).message } });
+            const cur = tasks.get(id);
+            if (cur && cur.state !== "cancelled") {
+              tasks.set(id, { state: "failed", failure: { message: (e as Error).message } });
+            }
           }
         })();
       }
