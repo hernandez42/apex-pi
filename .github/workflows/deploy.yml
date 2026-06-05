@@ -55,6 +55,20 @@ jobs:
         run: |
           flyctl version
           echo "FLY_APP = ${{ vars.FLY_APP || 'apex-pi' }}"
+          # Debug: show the token's shape (length + first/last 6 chars) without leaking it
+          echo "Token length: ${#FLY_API_TOKEN}"
+          echo "Token first 6: ${FLY_API_TOKEN:0:6}"
+          echo "Token last 6: ${FLY_API_TOKEN: -6}"
+          # Test the token directly against the GraphQL API
+          HTTP_CODE=$(curl -sS -o /tmp/whoami.json -w "%{http_code}" \
+            -H "Authorization: Bearer ${FLY_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -X POST \
+            -d '{"query":"{ viewer { email } }"}' \
+            https://api.fly.io/graphql)
+          echo "GraphQL HTTP: $HTTP_CODE"
+          cat /tmp/whoami.json
+          echo
           flyctl apps list --json | head -c 500 || true
 
       - name: Ensure the app exists
