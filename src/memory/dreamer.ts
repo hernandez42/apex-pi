@@ -7,6 +7,7 @@ import { config } from "../config.ts";
 
 export class Dreamer {
   private timer: ReturnType<typeof setInterval> | undefined;
+  private startup: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private engine: MemoryEngine) {}
 
@@ -16,13 +17,18 @@ export class Dreamer {
     const ms = Math.max(1, min) * 60 * 1000;
     this.timer = setInterval(() => this.run().catch((e) => log.error("dreamer.err", { err: (e as Error).message })), ms);
     // also run once at start, deferred so it doesn't block boot
-    setTimeout(() => this.run().catch((e) => log.error("dreamer.err", { err: (e as Error).message })), 10_000);
+    this.startup = setTimeout(() => {
+      this.startup = undefined;
+      this.run().catch((e) => log.error("dreamer.err", { err: (e as Error).message }));
+    }, 10_000);
     log.info("dreamer.started", { intervalMin: min });
   }
 
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    if (this.startup) clearTimeout(this.startup);
+    this.startup = undefined;
   }
 
   private async run(): Promise<void> {

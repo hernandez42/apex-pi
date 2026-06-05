@@ -32,6 +32,11 @@ test("installApexExtensions registers apex_* tools", () => {
   const h = createExtensionHost();
   installApexExtensions(h);
   const names = h.tools().map((t) => t.name);
+  // 4 core tools (bash, read, write, edit) + 7 apex_* + 4 codegraph_* + 1 understand
+  expect(names).toContain("bash");
+  expect(names).toContain("read");
+  expect(names).toContain("write");
+  expect(names).toContain("edit");
   expect(names).toContain("apex_search");
   expect(names).toContain("apex_ingest");
   expect(names).toContain("apex_relate");
@@ -39,6 +44,11 @@ test("installApexExtensions registers apex_* tools", () => {
   expect(names).toContain("apex_feedback");
   expect(names).toContain("apex_distill");
   expect(names).toContain("apex_list_skills");
+  expect(names).toContain("codegraph_search");
+  expect(names).toContain("codegraph_callers");
+  expect(names).toContain("codegraph_callees");
+  expect(names).toContain("codegraph_impact");
+  expect(names).toContain("understand_path");
 });
 
 test("apex_ingest tool stores a record", async () => {

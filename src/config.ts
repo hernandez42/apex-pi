@@ -35,6 +35,8 @@ export interface Config {
     readHardLimitBytes: number;
     toolResultMaxChars: number;
     maxRetries: number;
+    bashPolicy: "allow" | "deny" | "sandbox";
+    sandboxPaths: string[];
   };
   agent: {
     maxSteps: number;
@@ -116,6 +118,13 @@ export function loadConfig(): Config {
       readHardLimitBytes: envInt(process.env.TOOL_READ_HARD_LIMIT_BYTES, 5 * 1024 * 1024),
       toolResultMaxChars: envInt(process.env.TOOL_RESULT_MAX_CHARS, 24_000),
       maxRetries: envInt(process.env.TOOL_MAX_RETRIES, 1),
+      bashPolicy: (process.env.TOOL_BASH_POLICY === "deny" || process.env.TOOL_BASH_POLICY === "sandbox" || process.env.TOOL_BASH_POLICY === "allow")
+        ? process.env.TOOL_BASH_POLICY
+        : "allow",
+      sandboxPaths: (process.env.TOOL_SANDBOX_PATHS ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean),
     },
     agent: {
       maxSteps: envInt(process.env.AGENT_MAX_STEPS, 24),
