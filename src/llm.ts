@@ -46,7 +46,10 @@ export function resolveModel(): Model<any> {
   const id = (process.env.LLM_MODEL ?? "gpt-4o-mini").trim();
   const baseUrl = process.env.LLM_BASE_URL?.replace(/\/+$/, "");
 
-  const apply = (m: Model<any>): Model<any> => {
+  const apply = (m: Model<any> | null | undefined): Model<any> => {
+    if (m == null) {
+      throw new Error("getModel returned null/undefined");
+    }
     if (baseUrl && (m as { baseUrl?: string }).baseUrl !== baseUrl) {
       // pi-ai ships Model objects as frozen (Object.freeze), so we cannot
       // mutate `baseUrl` in place. Clone the object with the override
