@@ -49,13 +49,34 @@ test("graph expansion finds related memories", () => {
 });
 
 test("dream sweep decays and dedups", () => {
-  // Add duplicates
+  // ingest() dedupes identical content, so 3 calls produce 1 record.
+  // dream() on a single non-duplicate record should report merged=0 and
+  // decayed>=0. (Dedup path is exercised when raw duplicates already
+  // exist in the table; see the next test for that.)
   for (let i = 0; i < 3; i++) {
     store.ingest({ dimension: "procedural", content: "dream sweep fixture" });
   }
   const r = store.dream();
-  expect(r.merged).toBeGreaterThanOrEqual(2);
+  expect(r.merged).toBe(0);
   expect(r.decayed).toBeGreaterThanOrEqual(0);
+  expect(r.promoted).toBeGreaterThanOrEqual(0);
+});
+
+test("dream sweep merges pre-existing raw duplicates", () => {
+  // Force a duplicate row by bypassing ingest's dedup check (touch the
+  // private db for test purposes).
+  const db = (store as unknown as { db: { run(sql: string, ...params: unknown[]): void } }).db;
+  db.run(
+    "INSERT INTO memories (id, dimension, content, tags, importance, created_at, accessed_at, access_count, decay_until, hash, meta) VALUES ('dup-row-1', 'procedural', 'raw duplicate fixture', '[]', 0.5, 0, 0, 1, 0, 'hash-raw-dup', '{}')",
+  );
+  db.run(
+    "INSERT INTO memories (id, dimension, content, tags, importance, created_at, accessed_at, access_count, decay_until, hash, meta) VALUES ('dup-row-2', 'procedural', 'raw duplicate fixture', '[]', 0.5, 0, 0, 1, 0, 'hash-raw-dup', '{}')",
+  );
+  db.run(
+    "INSERT INTO memories (id, dimension, content, tags, importance, created_at, accessed_at, access_count, decay_until, hash, meta) VALUES ('dup-row-3', 'procedural', 'raw duplicate fixture', '[]', 0.5, 0, 0, 1, 0, 'hash-raw-dup', '{}')",
+  );
+  const r = store.dream();
+  expect(r.merged).toBe(2);
 });
 
 test("stats + health", () => {
