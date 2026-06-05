@@ -35,7 +35,7 @@
     "mcp": "bun run src/mcp-cli.ts",
     "check": "bun run src/setup-check.ts",
     "build": "bun build --target=bun --outfile=dist/cli.js src/cli.ts && bun build --target=bun --outfile=dist/mcp-cli.js src/mcp-cli.ts && bun build --target=bun --outfile=dist/agent.js src/agent.ts",
-    "build:compile": "bun build --compile --target=bun-linux-x64 --outfile=dist/apex-pi src/cli.ts",
+    "build:compile": "bun build --compile --target=bun-linux-x64 --outfile=dist/apex-pi src/cli.ts && bun build --compile --target=bun-linux-x64 --outfile=dist/apex-mcp src/mcp-cli.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "fly:deploy": "fly deploy",
