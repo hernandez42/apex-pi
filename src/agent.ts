@@ -40,14 +40,25 @@ function getHost(): ReturnType<typeof createExtensionHost> {
 }
 
 /** Resolve the model via pi-ai's getModel(provider, id). Falls back to
- *  the OpenAI "gpt-4o-mini" preset if the env provider is unknown. */
+ *  the OpenAI "gpt-4o-mini" preset if the env provider is unknown.
+ *  If LLM_BASE_URL is set, override baseUrl on the resolved model so
+ *  OpenAI-compatible providers (LongCat, OpenRouter, LiteLLM, etc.) work
+ *  out of the box. */
 export function resolveModel(): Model<any> {
   const cfg = config().llm;
+  const baseUrl = process.env.LLM_BASE_URL;
   try {
-    return getModel(cfg.provider as never, cfg.model);
+    const m = getModel(cfg.provider as never, cfg.model);
+    if (baseUrl) {
+      (m as { baseUrl?: string }).baseUrl = baseUrl.replace(/\/+$/, "");
+      log.info("model.baseUrl.override", { provider: cfg.provider, model: cfg.model, baseUrl: m.baseUrl });
+    }
+    return m;
   } catch (e) {
     log.warn("model.resolve.fail", { provider: cfg.provider, model: cfg.model, err: (e as Error).message });
-    return getModel("openai" as never, "gpt-4o-mini");
+    const fallback = getModel("openai" as never, "gpt-4o-mini");
+    if (baseUrl) (fallback as { baseUrl?: string }).baseUrl = baseUrl.replace(/\/+$/, "");
+    return fallback;
   }
 }
 

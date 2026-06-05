@@ -33,7 +33,11 @@ ENV APEX_PI_DATA=/data \
     LOG_LEVEL=info \
     MCP_ENABLED=1
 
+# tiny entrypoint shim: start --feishu when FEISHU_ENABLED=1, else plain HTTP.
+RUN printf '#!/bin/sh\nset -e\nif [ "${FEISHU_ENABLED}" = "1" ]; then exec bun run /app/cli.js --feishu; else exec bun run /app/cli.js; fi\n' > /usr/local/bin/apex-pi-entry
+RUN chmod +x /usr/local/bin/apex-pi-entry
+
 # tini: reaps zombies, signals correctly
-ENTRYPOINT ["/sbin/tini", "--", "bun", "run", "/app/cli.js"]
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/apex-pi-entry"]
 
 EXPOSE 8080
