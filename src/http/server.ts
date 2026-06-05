@@ -16,6 +16,7 @@ import { isAbsolute, resolve } from "node:path";
 import { systemPrompt } from "../skills/index.ts";
 import { createFeishuMom } from "../channels/feishu.ts";
 import { handleMcp } from "../mcp/server.ts";
+import type { MemoryDimension } from "../memory/types.ts";
 
 export function createApp(): Hono {
   const app = new Hono();
@@ -118,9 +119,12 @@ export function createApp(): Hono {
     // Bug #5 fix: validate `dimension` against the known set instead of
     // blindly casting. Unknown values fall back to the verdict-default
     // so callers can still pass garbage without crashing the engine.
-    const VALID_DIMS = new Set(["episodic", "semantic", "procedural", "declarative", "working"]);
-    const defaultDim = body.verdict === "down" ? "procedural" : "semantic";
-    const dim = body.dimension && VALID_DIMS.has(body.dimension) ? body.dimension : defaultDim;
+    const VALID_DIMS = new Set<MemoryDimension>(["episodic", "semantic", "procedural", "declarative", "working"]);
+    const defaultDim: MemoryDimension = body.verdict === "down" ? "procedural" : "semantic";
+    const dim: MemoryDimension =
+      body.dimension && (VALID_DIMS as Set<string>).has(body.dimension)
+        ? (body.dimension as MemoryDimension)
+        : defaultDim;
     const importance = body.verdict === "down" ? 0.9 : body.verdict === "up" ? 0.4 : 0.6;
     const tag = body.verdict === "down" ? "feedback:bad" : body.verdict === "up" ? "feedback:good" : "feedback:note";
     const rec = await getMemoryEngine(r.store).ingest({
