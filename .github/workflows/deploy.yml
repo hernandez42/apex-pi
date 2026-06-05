@@ -1,11 +1,128 @@
 name: deploy
+
+# Deploy apex-pi to Fly.io.
+#
+# Triggers:
+#   * push to main     — automatic deploy of the latest commit
+#   * workflow_dispatch — manual deploy (default ref is the current main)
+#
+# Required secrets (set in repo Settings → Secrets and variables → Actions):
+#   FLY_API_TOKEN         — Fly.io personal access token
+#   LLM_API_KEY           — OpenAI / OpenAI-compatible key
+#   LLM_BASE_URL          — optional; override baseUrl on the resolved model
+#   LLM_PROVIDER          — optional; e.g. "openai" or "openai-compatible"
+#   LLM_MODEL             — optional; e.g. "gpt-4o-mini" or "LongCat-2.0-Preview"
+#   FEISHU_APP_ID         — optional; Feishu bot app id
+#   FEISHU_APP_SECRET     — optional; Feishu bot app secret
+#
+# Required variables (Settings → Secrets and variables → Actions → Variables):
+#   FLY_APP               — e.g. "apex-pi"
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      strategy:
+        description: "deploy strategy"
+        required: false
+        default: "rolling"
+        type: choice
+        options:
+          - rolling
+          - immediate
+
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
 
 jobs:
-  hello:
+  deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - run: echo "deploy step placeholder"
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Pre-flight: ping the API
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          flyctl api ping
+
+      - name: Ensure the app exists
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP: ${{ vars.FLY_APP || 'apex-pi' }}
+        run: |
+          if ! flyctl status --app "$FLY_APP" >/dev/null 2>&1; then
+            echo "App $FLY_APP does not exist; creating (org=personal, region=sin)..."
+            flyctl apps create "$FLY_APP" --org personal --primary-region sin
+          else
+            echo "App $FLY_APP already exists"
+          fi
+
+      - name: Ensure the volume exists
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP: ${{ vars.FLY_APP || 'apex-pi' }}
+        run: |
+          if ! flyctl volumes list --app "$FLY_APP" -j | grep -q "apex_pi_data"; then
+            echo "Creating volume apex_pi_data (1gb)..."
+            flyctl volumes create apex_pi_data --app "$FLY_APP" --size 1 --region sin --yes
+          else
+            echo "Volume apex_pi_data already exists"
+          fi
+
+      - name: Apply secrets
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP: ${{ vars.FLY_APP || 'apex-pi' }}
+        run: |
+          set -e
+          flyctl secrets unset --app "$FLY_APP" LLM_API_KEY LLM_BASE_URL LLM_PROVIDER LLM_MODEL \
+            FEISHU_APP_ID FEISHU_APP_SECRET FEISHU_ENABLED 2>/dev/null || true
+          if [ -z "${{ secrets.LLM_API_KEY }}" ]; then
+            echo "::error::LLM_API_KEY secret is required"
+            exit 1
+          fi
+          SECRETS="LLM_API_KEY=${{ secrets.LLM_API_KEY }}"
+          [ -n "${{ secrets.LLM_BASE_URL }}" ]     && SECRETS="$SECRETS LLM_BASE_URL=${{ secrets.LLM_BASE_URL }}"
+          [ -n "${{ secrets.LLM_PROVIDER }}" ]     && SECRETS="$SECRETS LLM_PROVIDER=${{ secrets.LLM_PROVIDER }}"
+          [ -n "${{ secrets.LLM_MODEL }}" ]        && SECRETS="$SECRETS LLM_MODEL=${{ secrets.LLM_MODEL }}"
+          [ -n "${{ secrets.FEISHU_APP_ID }}" ]     && SECRETS="$SECRETS FEISHU_APP_ID=${{ secrets.FEISHU_APP_ID }}"
+          [ -n "${{ secrets.FEISHU_APP_SECRET }}" ] && SECRETS="$SECRETS FEISHU_APP_SECRET=${{ secrets.FEISHU_APP_SECRET }} FEISHU_ENABLED=1"
+          flyctl secrets set --app "$FLY_APP" $SECRETS
+          echo "Secrets applied"
+
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_APP: ${{ vars.FLY_APP || 'apex-pi' }}
+        run: |
+          STRAT="${{ inputs.strategy }}"
+          [ -z "$STRAT" ] && STRAT="rolling"
+          flyctl deploy --app "$FLY_APP" --strategy "$STRAT" --wait-timeout 300
+
+      - name: Verify
+        env:
+          FLY_APP: ${{ vars.FLY_APP || 'apex-pi' }}
+        run: |
+          set -e
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            sleep 5
+            echo "=== attempt $i: healthz ==="
+            if curl -fsS "https://$FLY_APP.fly.dev/healthz"; then
+              echo
+              echo "=== readyz ==="
+              curl -fsS "https://$FLY_APP.fly.dev/readyz" || true
+              exit 0
+            fi
+          done
+          echo "::error::healthz did not respond after 10 attempts"
+          flyctl logs --app "$FLY_APP" -n 200 || true
+          exit 1
