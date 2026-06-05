@@ -16,6 +16,8 @@ name: deploy
 #   FLY_APP               — e.g. "apex-pi"
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       ref:
