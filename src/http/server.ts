@@ -27,8 +27,16 @@ export function createApp(): Hono {
   // ─── diagnostics ────────────────────────────────────────────────────
   app.get("/healthz", (c) => c.json({ ok: true, version: "0.2.0", engine: "pi-agent-core" }));
   app.get("/readyz", async (c) => {
+    // Bug #4 fix: don't assume `getStore()` is non-null. If `boot()` has
+    // not been called (e.g. /readyz hit before the server's first
+    // request triggers boot via the agent), we still want a clean 503
+    // with a useful payload — not a TypeError crash.
+    const store = getStore();
+    if (!store) {
+      return c.json({ ok: false, reason: "not booted" }, 503);
+    }
     try {
-      const stats = await getMemoryEngine(getStore()!).stats();
+      const stats = await getMemoryEngine(store).stats();
       return c.json({ ok: true, memory: stats });
     } catch (e) {
       return c.json({ ok: false, err: (e as Error).message }, 503);
@@ -50,19 +58,23 @@ export function createApp(): Hono {
       async start(controller) {
         const send = (event: string, data: unknown) =>
           controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        // Bug #6 fix: capture `sub` in a `let` so the catch path can
+        // unsubscribe. Previously, when `agent.prompt()` threw, the
+        // function exited via the catch and the subscription leaked.
+        let sub: (() => void) | null = null;
         try {
           const agent = getAgent();
-          const sub = agent.subscribe((ev: import("@earendil-works/pi-agent-core").AgentEvent) => {
+          sub = agent.subscribe((ev: import("@earendil-works/pi-agent-core").AgentEvent) => {
             // Forward every relevant event; the client filters.
             send(ev.type, ev);
           });
           send("start", { ts: Date.now() });
           await agent.prompt(body.message);
           send("done", { ts: Date.now() });
-          sub();
         } catch (e) {
           send("error", { message: (e as Error).message });
         } finally {
+          if (sub) sub();
           controller.close();
         }
       },
@@ -76,24 +88,42 @@ export function createApp(): Hono {
     });
   });
 
+  // Bug #4 helper: return 503 if the store is not yet open.
+  const requireStore = (c: { json: (v: unknown, s?: number) => Response }) => {
+    const s = getStore();
+    if (!s) return { ok: false as const, res: c.json({ error: "store not booted" }, 503) };
+    return { ok: true as const, store: s };
+  };
+
   // ─── memory ─────────────────────────────────────────────────────────
   app.post("/v1/memories", async (c) => {
+    const r = requireStore(c);
+    if (!r.ok) return r.res;
     const body = await c.req.json();
-    const rec = await getMemoryEngine(getStore()!).ingest(body);
+    const rec = await getMemoryEngine(r.store).ingest(body);
     return c.json(rec);
   });
   app.post("/v1/memories/search", async (c) => {
+    const r = requireStore(c);
+    if (!r.ok) return r.res;
     const body = await c.req.json<{ query: string; top_k?: number }>();
-    const hits = await getMemoryEngine(getStore()!).search({ query: body.query, topK: body.top_k ?? 8 });
+    const hits = await getMemoryEngine(r.store).search({ query: body.query, topK: body.top_k ?? 8 });
     return c.json({ hits });
   });
   app.post("/v1/feedback", async (c) => {
+    const r = requireStore(c);
+    if (!r.ok) return r.res;
     const body = await c.req.json<{ verdict: "up" | "down" | "note"; comment?: string; dimension?: string }>();
     if (!body.verdict) return c.json({ error: "verdict is required" }, 400);
-    const dim = (body.dimension as never) ?? (body.verdict === "down" ? "procedural" : "semantic");
+    // Bug #5 fix: validate `dimension` against the known set instead of
+    // blindly casting. Unknown values fall back to the verdict-default
+    // so callers can still pass garbage without crashing the engine.
+    const VALID_DIMS = new Set(["episodic", "semantic", "procedural", "declarative", "working"]);
+    const defaultDim = body.verdict === "down" ? "procedural" : "semantic";
+    const dim = body.dimension && VALID_DIMS.has(body.dimension) ? body.dimension : defaultDim;
     const importance = body.verdict === "down" ? 0.9 : body.verdict === "up" ? 0.4 : 0.6;
     const tag = body.verdict === "down" ? "feedback:bad" : body.verdict === "up" ? "feedback:good" : "feedback:note";
-    const rec = await getMemoryEngine(getStore()!).ingest({
+    const rec = await getMemoryEngine(r.store).ingest({
       content: body.comment?.trim() || `(${body.verdict})`,
       dimension: dim,
       importance,
@@ -102,7 +132,9 @@ export function createApp(): Hono {
     return c.json(rec);
   });
   app.get("/v1/stats", async (c) => {
-    const engine = getMemoryEngine(getStore()!);
+    const r = requireStore(c);
+    if (!r.ok) return r.res;
+    const engine = getMemoryEngine(r.store);
     const cg = getCodegraph();
     return c.json({
       engine: engine.mode(),
@@ -111,7 +143,11 @@ export function createApp(): Hono {
       uptimeSec: Math.floor(process.uptime()),
     });
   });
-  app.get("/v1/graph", async (c) => c.json(await getMemoryEngine(getStore()!).graphJson()));
+  app.get("/v1/graph", async (c) => {
+    const r = requireStore(c);
+    if (!r.ok) return r.res;
+    return c.json(await getMemoryEngine(r.store).graphJson());
+  });
 
   // ─── codegraph ──────────────────────────────────────────────────────
   app.post("/v1/codegraph/index", async (c) => {

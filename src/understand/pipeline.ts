@@ -5,9 +5,9 @@
 // orchestration state.
 
 import { Codegraph, getCodegraph } from "../codegraph/index.ts";
-import { complete, getModel, type Model } from "@earendil-works/pi-ai";
+import { complete, type Model } from "@earendil-works/pi-ai";
 import { log } from "../log.ts";
-import { config } from "../config.ts";
+import { resolveModel } from "../llm.ts";
 import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
@@ -184,8 +184,13 @@ Write a concise (max ~300 words) summary that:
 4. Surfaces anything that looks like an entry point (scripts, main.ts, bin/).
 Be specific, use file paths. No filler.`;
   try {
-    const cfg = config();
-    const model: Model<any> = getModel(cfg.llm.provider as never, cfg.llm.model);
+    // Bug #2 fix: use the shared `resolveModel()` so that (a) friendly
+    // provider aliases (`openai-compatible` → `openai`) are honoured,
+    // (b) `LLM_BASE_URL` overrides the resolved model's baseUrl, and
+    // (c) unknown providers fall back to `openai/gpt-4o-mini` instead
+    // of returning `undefined` (which crashed `complete()` with
+    // `undefined is not an object (evaluating 'model.api')`).
+    const model: Model<any> = resolveModel();
     const res = await complete(model, {
       systemPrompt: "You are a precise, terse technical writer.",
       messages: [

@@ -50,11 +50,11 @@
 ## 📦 Install
 
 ```bash
-# As a standalone binary on the Fly.io free tier (256 MB RAM)
-git clone https://github.com/you/apex-pi
+# As a standalone binary (Bun runtime, ~30 MB RAM idle)
+git clone https://github.com/hernandez42/apex-pi
 cd apex-pi
 bun install
-bun run build:compile     # produces dist/apex-pi (linux/musl)
+bun run build:compile     # produces dist/apex-pi (linux-x64, self-contained)
 ./dist/apex-pi             # starts the HTTP server on :8080
 
 # As a pi-mono extension (uses your existing `pi` install)
@@ -73,7 +73,7 @@ bun install
 bun run check         # environment diagnostic
 bun test              # 4 test files: memory, codegraph, extensions, http e2e
 bun run dev           # HTTP server on :8080 → http://localhost:8080
-./scripts/deploy.sh   # one-shot deploy to Fly.io
+# Dockerfile is included; deploy to any container host that supports linux-x64
 ```
 
 CLI:
@@ -141,7 +141,7 @@ HTTP API (subset):
 
 ---
 
-## 📐 Resource budget (Fly.io free tier, 256 MB)
+## 📐 Resource budget (Bun, 256 MB target)
 
 ```
 bun runtime                 30 MB
@@ -190,7 +190,7 @@ apex-pi/
 │   └── release-checklist/
 ├── extensions/               # symlinked into `pi` on `pi install npm:apex-pi`
 ├── Dockerfile                # bun build + tini + ca-certs
-├── fly.toml                  # 256 MB / shared CPU / auto-stop / /healthz
+├── Dockerfile                # multi-stage Bun build → linux-x64 binary
 ├── .github/workflows/
 │   ├── ci.yml                # typecheck + test + build + docker
 │   └── release.yml           # multi-arch Docker → GHCR

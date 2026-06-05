@@ -80,6 +80,31 @@ test("POST /v1/feedback ingests tagged record", async () => {
   expect(hits[0]!.record.tags).toContain("feedback:bad");
 });
 
+test("POST /v1/feedback with unknown dimension falls back to verdict-default (Bug #5)", async () => {
+  const res = await fetch(`http://127.0.0.1:${server.port}/v1/feedback`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ verdict: "down", comment: "garbage dim", dimension: "mythical" }),
+  });
+  expect(res.status).toBe(200);
+  const engine = getMemoryEngine(getStore()!);
+  const hits = await engine.search({ query: "garbage dim", topK: 1 });
+  // 'down' verdict defaults to 'procedural' when dimension is invalid.
+  expect(hits[0]!.record.dimension).toBe("procedural");
+});
+
+test("POST /v1/feedback with valid dimension honours it (Bug #5)", async () => {
+  const res = await fetch(`http://127.0.0.1:${server.port}/v1/feedback`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ verdict: "up", comment: "episodic test", dimension: "episodic" }),
+  });
+  expect(res.status).toBe(200);
+  const engine = getMemoryEngine(getStore()!);
+  const hits = await engine.search({ query: "episodic test", topK: 1 });
+  expect(hits[0]!.record.dimension).toBe("episodic");
+});
+
 test("GET /v1/skills lists built-in + loaded", async () => {
   const res = await fetch(`http://127.0.0.1:${server.port}/v1/skills`);
   expect(res.status).toBe(200);

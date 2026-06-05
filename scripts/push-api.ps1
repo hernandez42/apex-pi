@@ -42,11 +42,19 @@ $i = 0
 foreach ($rel in $files) {
   $i++
   $abs = Join-Path (Get-Location) $rel
+  $relUnix = $rel.Replace('\', '/')
+  if (-not (Test-Path -LiteralPath $abs)) {
+    # File was deleted locally. Omit it from the tree entirely — since
+    # the tree has no `base_tree`, the resulting commit's tree will
+    # simply not contain the file, which is the same as a deletion.
+    Write-Host "      [del] $relUnix"
+    continue
+  }
   $bytes = [System.IO.File]::ReadAllBytes($abs)
   $b64 = [Convert]::ToBase64String($bytes)
   $payload = @{ content = $b64; encoding = "base64" } | ConvertTo-Json -Compress
   $blob = Invoke-RestMethod -Uri "$apiBase/repos/$Owner/$Repo/git/blobs" -Headers $headers -Method POST -Body $payload -TimeoutSec 30
-  $blobEntries.Add(@{ path = $rel.Replace('\', '/'); mode = "100644"; type = "blob"; sha = $blob.sha }) | Out-Null
+  $blobEntries.Add(@{ path = $relUnix; mode = "100644"; type = "blob"; sha = $blob.sha }) | Out-Null
   if ($i % 10 -eq 0) { Write-Host "      $i/$($files.Count)..." }
 }
 Write-Host "      $i/$($files.Count) blobs uploaded"

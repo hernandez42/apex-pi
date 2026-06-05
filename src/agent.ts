@@ -13,12 +13,13 @@
 // iterator wrapper.
 
 import { Agent, type AgentEvent, type AgentTool } from "@earendil-works/pi-agent-core";
-import { getModel, type Model } from "@earendil-works/pi-ai";
+import { type Model } from "@earendil-works/pi-ai";
 import { config } from "./config.ts";
 import { boot, shutdown as bootstrapShutdown, getStore } from "./bootstrap.ts";
 import { installApexExtensions, INSTINCTS, BASE_PROMPT, createExtensionHost } from "./extensions/index.ts";
 import { getMemoryEngine } from "./memory/index.ts";
 import { log } from "./log.ts";
+import { resolveModel } from "./llm.ts";
 
 let agent: Agent | undefined;
 let host: ReturnType<typeof createExtensionHost> | undefined;
@@ -39,28 +40,9 @@ function getHost(): ReturnType<typeof createExtensionHost> {
   return host;
 }
 
-/** Resolve the model via pi-ai's getModel(provider, id). Falls back to
- *  the OpenAI "gpt-4o-mini" preset if the env provider is unknown.
- *  If LLM_BASE_URL is set, override baseUrl on the resolved model so
- *  OpenAI-compatible providers (LongCat, OpenRouter, LiteLLM, etc.) work
- *  out of the box. */
-export function resolveModel(): Model<any> {
-  const cfg = config().llm;
-  const baseUrl = process.env.LLM_BASE_URL;
-  try {
-    const m = getModel(cfg.provider as never, cfg.model);
-    if (baseUrl) {
-      (m as { baseUrl?: string }).baseUrl = baseUrl.replace(/\/+$/, "");
-      log.info("model.baseUrl.override", { provider: cfg.provider, model: cfg.model, baseUrl: m.baseUrl });
-    }
-    return m;
-  } catch (e) {
-    log.warn("model.resolve.fail", { provider: cfg.provider, model: cfg.model, err: (e as Error).message });
-    const fallback = getModel("openai" as never, "gpt-4o-mini");
-    if (baseUrl) (fallback as { baseUrl?: string }).baseUrl = baseUrl.replace(/\/+$/, "");
-    return fallback;
-  }
-}
+/** Re-export the shared resolver so existing callers (e.g. tests) keep
+ *  working. */
+export { resolveModel };
 
 export interface AgentOptions {
   model?: Model<any>;

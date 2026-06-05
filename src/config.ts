@@ -139,12 +139,24 @@ export function loadConfig(): Config {
 }
 
 let cached: Config | undefined;
+/** Read the current config. The first call parses the environment; every
+ *  subsequent call returns the same `Config` instance for performance
+ *  (this is on the hot path of every tool call and HTTP request). To
+ *  pick up env changes at runtime, call {@link reloadConfig} explicitly. */
 export function config(): Config {
   if (!cached) cached = loadConfig();
   return cached;
 }
 
-/** Test helper: reset the cached config so a new env is picked up. */
-export function resetConfigForTests(): void {
+/** Force the next {@link config} call to re-read the environment. Use
+ *  this after mutating `process.env` in long-running processes (e.g. a
+ *  hot-reload hook, or a feature flag endpoint). */
+export function reloadConfig(): void {
   cached = undefined;
+}
+
+/** Test helper: alias for {@link reloadConfig}. Kept for backwards
+ *  compatibility with the existing test suite. */
+export function resetConfigForTests(): void {
+  reloadConfig();
 }
