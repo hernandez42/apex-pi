@@ -62,8 +62,9 @@ jobs:
           FLY_APP: ${{ vars.FLY_APP || 'apex-pi' }}
         run: |
           if ! flyctl status --app "$FLY_APP" >/dev/null 2>&1; then
-            echo "App $FLY_APP does not exist; creating (org=personal, region=sin)..."
-            flyctl apps create "$FLY_APP" --org personal --primary-region sin
+            echo "App $FLY_APP does not exist; creating (org=personal)..."
+            flyctl apps create "$FLY_APP" --org personal
+            flyctl regions set sin --app "$FLY_APP" || true
           else
             echo "App $FLY_APP already exists"
             flyctl status --app "$FLY_APP" | head -20
