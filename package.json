@@ -1,0 +1,78 @@
+{
+  "name": "apex-pi",
+  "version": "0.2.0",
+  "description": "Apex distribution of pi-mono: 5D memory (apex-mem), codegraph, understand pipeline, and Feishu channel on top of @earendil-works/pi-agent-core.",
+  "type": "module",
+  "bin": {
+    "apex-pi": "dist/cli.js",
+    "apex-mcp": "dist/mcp-cli.js"
+  },
+  "main": "./dist/agent.js",
+  "types": "./dist/agent.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/agent.d.ts",
+      "import": "./dist/agent.js"
+    },
+    "./extensions": {
+      "types": "./dist/extensions/index.d.ts",
+      "import": "./dist/extensions/index.js"
+    },
+    "./hooks": {
+      "types": "./dist/extensions/host.d.ts",
+      "import": "./dist/extensions/host.js"
+    }
+  },
+  "files": [
+    "dist",
+    "skills",
+    "README.md"
+  ],
+  "scripts": {
+    "dev": "bun --hot run src/cli.ts",
+    "start": "bun run src/cli.ts",
+    "cli": "bun run src/cli.ts",
+    "mcp": "bun run src/mcp-cli.ts",
+    "check": "bun run src/setup-check.ts",
+    "build": "bun build --target=bun --outfile=dist/cli.js src/cli.ts && bun build --target=bun --outfile=dist/mcp-cli.js src/mcp-cli.ts && bun build --target=bun --outfile=dist/agent.js src/agent.ts",
+    "build:compile": "bun build --compile --target=bun-linux-x64-musl --outfile=dist/apex-pi src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "fly:deploy": "fly deploy",
+    "verify": "bun run typecheck && bun run test"
+  },
+  "keywords": [
+    "pi-mono",
+    "pi-extension",
+    "pi-package",
+    "ai-agent",
+    "llm",
+    "memory",
+    "codegraph",
+    "feishu",
+    "lark",
+    "apex-mem"
+  ],
+  "pi": {
+    "skills": ["./skills"]
+  },
+  "dependencies": {
+    "@earendil-works/pi-agent-core": "^0.78.1",
+    "@earendil-works/pi-ai": "^0.78.1",
+    "typebox": "^1.1.38",
+    "hono": "^4.6.14"
+  },
+  "optionalDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.78.1",
+    "@larksuiteoapi/node-sdk": "^1.59.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.6.3"
+  },
+  "license": "MIT",
+  "engines": {
+    "bun": ">=1.1.0",
+    "node": ">=22.19.0"
+  }
+}

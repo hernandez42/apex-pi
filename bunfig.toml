@@ -1,0 +1,15 @@
+[install]
+# Pin to lockfile in CI; allow updates in dev.
+frozenLockfile = false
+exact = false
+
+[install.cache]
+disable = false
+
+[test]
+# Memory + codegraph tests need a writable temp dir.
+preload = []
+
+[run]
+# Bun tries to use .env automatically; we read it through config.ts instead.
+bun = true

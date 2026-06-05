@@ -1,0 +1,97 @@
+# fly.toml — apex-pi on the Fly.io free tier.
+#
+# Free-tier guardrails used:
+#   * shared-cpu-1x × 1     (the free tier only allows shared)
+#   * 256 MB RAM            (the free tier caps at 256 MB)
+#   * auto_stop_machines    (sleeps when idle → saves the always-free hours)
+#   * min_machines_running 0 (scales to zero on no traffic)
+#   * 1 GB persistent volume mounted at /data  (SQLite lives there)
+
+app = "apex-pi"
+primary_region = "sin"   # Singapore — pick what is closest to your Feishu tenant
+kill_signal = "SIGTERM"
+kill_timeout = "10s"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[deploy]
+  release_command = "echo apex-pi deployed"
+  strategy = "rolling"
+
+[env]
+  APEX_PI_DATA = "/data"
+  HOST = "0.0.0.0"
+  PORT = "8080"
+  LOG_LEVEL = "info"
+  LLM_PROVIDER = "openai-compatible"
+  # Override per environment with `fly secrets set LLM_BASE_URL=... LLM_MODEL=... LLM_API_KEY=...`
+  LLM_BASE_URL = "https://api.openai.com/v1"
+  LLM_MODEL = "gpt-4o-mini"
+  # Memory + codegraph defaults sized for 256 MB
+  APEXMEM_CAP = "5000"
+  APEXMEM_DREAM_MIN = "30"
+  CODEGRAPH_MAX_FILES = "2000"
+  CODEGRAPH_MAX_FILE_KB = "256"
+
+[experimental]
+  auto_rollback = true
+
+# --- Machines (free tier: shared-cpu-1x, 256 mb) ---
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256
+
+# Auto-stop when idle, auto-start on request → fits free tier.
+[metrics]
+  port = 8080
+  path = "/healthz"
+
+# --- Persistent volume: 1 GB for SQLite data ---
+[[mounts]]
+  source = "apex_pi_data"
+  destination = "/data"
+
+[mounts.options]
+  size = "1gb"
+
+# --- Services & checks ---
+[[services]]
+  protocol = "tcp"
+  internal_port = 8080
+  processes = ["app"]
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  max_machines_running = 1
+
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 50
+    soft_limit = 20
+
+  [[services.ports]]
+    port = 80
+    handlers = ["http"]
+    force_https = true
+
+  [[services.ports]]
+    port = 443
+    handlers = ["tls", "http"]
+
+  [[services.tcp_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+
+  [[services.http_checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "get"
+    path = "/healthz"
+
+  # Body limit: keep it small to avoid RAM spikes.
+  [services.http_checks.headers]
+    X-Health = "apex-pi"

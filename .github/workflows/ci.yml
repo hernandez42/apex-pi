@@ -1,0 +1,64 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.1.34
+
+      - name: Install
+        # First-run uses non-frozen install so bun can generate bun.lockb.
+        # Subsequent runs should commit bun.lockb and switch to --frozen-lockfile.
+        run: bun install
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Unit tests
+        run: bun test
+
+      - name: Bundle (smoke build)
+        run: bun run build
+
+      - name: Compile binary (linux/musl)
+        run: bun run build:compile
+
+      - name: Smoke test the binary
+        run: |
+          set -e
+          ./dist/apex-pi --help
+          MCP_PORT=18080 ./dist/apex-mcp &
+          MCP_PID=$!
+          sleep 2
+          curl -fsS http://127.0.0.1:18080/healthz
+          kill $MCP_PID 2>/dev/null || true
+          APEX_PI_DATA=$(mktemp -d) LLM_PROVIDER=openai LLM_MODEL=gpt-4o-mini LLM_API_KEY=test-key PORT=18081 ./dist/apex-pi &
+          HTTP_PID=$!
+          sleep 2
+          curl -fsS http://127.0.0.1:18081/healthz
+          curl -fsS http://127.0.0.1:18081/readyz
+          kill $HTTP_PID 2>/dev/null || true
+
+      - name: Docker build
+        run: docker build -t apex-pi:ci .
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.1.34
+      - run: bun install
+      - run: bun run typecheck
