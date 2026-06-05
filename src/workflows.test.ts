@@ -54,6 +54,8 @@ interface FakeClient {
   fetchTaskResult: (id: string, opts?: unknown) => Promise<FakeState | null>;
   cancelTask: (id: string, queue?: string) => Promise<void>;
   startWorker: (opts?: unknown) => Promise<{ close: () => Promise<void>; opts: unknown }>;
+  /** Records the opts passed to the most recent startWorker call. */
+  lastStartWorkerOpts?: unknown;
   close: () => Promise<void>;
   registerTask: <P = unknown, R = unknown>(
     opts: { name: string; queue?: string; defaultMaxAttempts?: number },
@@ -111,10 +113,10 @@ function makeFakeClient(): FakeClient {
         tasks.set(id, { state: "cancelled" });
       }
     },
-    startWorker: async (opts) => ({
-      close: async () => {},
-      opts,
-    }),
+    startWorker: async (opts) => {
+      client.lastStartWorkerOpts = opts;
+      return { close: async () => {}, opts };
+    },
     close: async () => {},
   };
   return client;
@@ -266,9 +268,11 @@ describe("workflows: enabled path", () => {
     expect(lastClient).not.toBeNull();
     expect(lastClient!.queueName).toBe("test_queue");
     expect([...lastClient!.handlers.keys()].sort()).toEqual(["apex_distill", "understand"]);
-    // startWorker was called with the configured concurrency.
-    const w = await lastClient!.startWorker({});
-    expect((w.opts as { concurrency?: number }).concurrency).toBe(3);
+    // startWorker was called with the configured concurrency (we record
+    // the opts on the fake, no need to call it again).
+    const w = lastClient!.lastStartWorkerOpts as { concurrency?: number; claimTimeout?: number } | undefined;
+    expect(w).toBeDefined();
+    expect(w!.concurrency).toBe(3);
   });
 
   test("startWorkflows() is idempotent: second call is a no-op", async () => {
@@ -514,6 +518,10 @@ describe("workflows: HTTP routes (enabled)", () => {
   test("POST /v1/workflows/understand with inline=true runs synchronously", async () => {
     process.env.ABSURD_DATABASE_URL = "postgres://fake";
     process.env.ABSURD_ENABLED = "1";
+    // The codegraph module opens a SQLite file under APEX_PI_DATA. Make
+    // sure that points at a writable temp dir for this test.
+    process.env.APEX_PI_DATA = mkdtempSync(join(tmpdir(), "apex-pi-wf-data-"));
+    testDataDir = process.env.APEX_PI_DATA;
     resetConfigForTests();
     const wf = require_workflows();
     await wf.startWorkflows();
@@ -528,7 +536,10 @@ describe("workflows: HTTP routes (enabled)", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ path: dir, graph_only: true, inline: true }),
     });
-    expect(res.status).toBe(200);
+    if (res.status !== 200) {
+      const text = await res.text();
+      throw new Error(`inline understand failed: status=${res.status} body=${text}`);
+    }
     const body = (await res.json()) as { mode: string; result: { root: string; scanned: number } };
     expect(body.mode).toBe("inline");
     expect(body.result.root).toBe(dir);
