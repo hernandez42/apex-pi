@@ -13,6 +13,8 @@
 //   4. Add an HTTP route in `src/http/server.ts` (see `mountWorkflows`).
 
 import type { TaskContext, TaskResultSnapshot, JsonValue } from "absurd-sdk";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { understand, type UnderstandOptions, type UnderstandResult } from "../understand/pipeline.ts";
 import { log } from "../log.ts";
 import { getCodegraph } from "../codegraph/index.ts";
@@ -74,6 +76,79 @@ async function understandTask(
   };
 }
 
+/** Parameters for the durable `apex_distill` workflow. Mirrors the
+ *  in-process `apex_distill` tool but adds `skillsDir` because the
+ *  worker thread does not necessarily have the same `config()` state
+ *  as the main process. */
+export interface DistillParams {
+  /** Lower-case skill id, e.g. "release-checklist". */
+  name: string;
+  /** Sequence of (tool, input, output_summary) triples that worked. */
+  steps: Array<{ tool: string; input?: unknown; output?: string }>;
+  /** Target directory; the worker writes `${skillsDir}/${name}/SKILL.md`. */
+  skillsDir: string;
+  /** Optional free-form "when to use" hint, written into the SKILL.md. */
+  whenToUse?: string;
+}
+
+export interface DistillResult {
+  name: string;
+  path: string;
+  bytes: number;
+  steps: number;
+}
+
+/** Synthesise a SKILL.md from a successful tool-call sequence. This is
+ *  the durable equivalent of the in-process `apex_distill` tool in
+ *  `src/extensions/memory.ts`. The checkpointed step is the I/O itself:
+ *  the markdown is rendered once and persisted; re-running returns the
+ *  same path without re-rendering. */
+async function distillTask(
+  params: DistillParams,
+  ctx: TaskContext,
+): Promise<DistillResult> {
+  if (!params.name) throw new Error("name is required");
+  if (!params.steps || params.steps.length === 0) throw new Error("steps must contain at least 1 entry");
+  if (!params.skillsDir) throw new Error("skillsDir is required (worker has no config() of its own)");
+
+  const written = await ctx.step("write", async () => {
+    const name = String(params.name).toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+    const lines: string[] = [
+      `# ${name}`,
+      ``,
+      `> Distilled automatically from a successful agent run.`,
+      ``,
+      `## When to use`,
+      ``,
+      `${params.whenToUse?.trim() || "Activate this skill when the user asks for the same multi-step outcome."}`,
+      ``,
+      `## Steps`,
+      ``,
+    ];
+    for (const s of params.steps) {
+      const input = s.input !== undefined ? ` (input: ${JSON.stringify(s.input)})` : "";
+      const out = (s.output ?? "").slice(0, 280);
+      lines.push(`1. **${s.tool}**${input}`);
+      if (out) lines.push(`   - Expected output: \`${out.replace(/\n/g, " ")}\``);
+    }
+    lines.push(``);
+    const skillDir = join(params.skillsDir, name);
+    mkdirSync(skillDir, { recursive: true });
+    const path = join(skillDir, "SKILL.md");
+    const text = lines.join("\n") + "\n";
+    writeFileSync(path, text, "utf8");
+    return { name, path, bytes: Buffer.byteLength(text, "utf8") };
+  });
+
+  log.info("workflows.apex_distill.done", {
+    name: written.name,
+    path: written.path,
+    bytes: written.bytes,
+    steps: params.steps.length,
+  });
+  return { ...written, steps: params.steps.length };
+}
+
 /** Test/utility: list the workflows registered with the engine. */
 export function builtinWorkflowNames(): string[] {
   return ["understand", "apex_distill"];
@@ -85,12 +160,9 @@ export function registerBuiltinHandlers(client: AbsurdLike): void {
     { name: "understand", defaultMaxAttempts: 2 },
     understandTask,
   );
-  client.registerTask<{ content: string; dimension: string; importance: number }, { id: string }>(
+  client.registerTask<DistillParams, DistillResult>(
     { name: "apex_distill", defaultMaxAttempts: 3 },
-    async (params, _ctx) => {
-      log.info("workflows.apex_distill", { dimension: params.dimension, len: params.content.length });
-      return { id: `apex_distill:${Date.now().toString(36)}` };
-    },
+    distillTask,
   );
 }
 

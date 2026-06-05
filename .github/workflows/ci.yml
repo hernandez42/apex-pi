@@ -7,6 +7,17 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# Cancel in-progress runs for the same ref so we don't burn minutes on
+# stale pushes / superseded PR commits. New commits get a fresh run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Default to the least privilege. Individual jobs can widen per-step
+# (`actions/checkout@v4` already has its own scoping).
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest

@@ -374,6 +374,117 @@ describe("workflows: handlers", () => {
     const result = (await handler({ content: "x", dimension: "semantic", importance: 0.5 }, ctx)) as { id: string };
     expect(result.id).toMatch(/^apex_distill:/);
   });
+
+  test("apex_distill (new shape) writes a SKILL.md and returns its path", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "apex-distill-"));
+    testDataDir = dir;
+    const h = require_handlers();
+    const fake = makeFakeClient();
+    h.registerBuiltinHandlers(fake as never);
+    const handler = fake.handlers.get("apex_distill")!;
+    const ctx = makeFakeCtx("t1");
+    const result = (await handler(
+      {
+        name: "release-checklist",
+        skillsDir: dir,
+        whenToUse: "When shipping a new version of apex-pi.",
+        steps: [
+          { tool: "bash", input: { cmd: "git tag" }, output: "v0.2.0" },
+          { tool: "apex_search", input: { query: "release" }, output: "found 3 hits" },
+        ],
+      },
+      ctx,
+    )) as { name: string; path: string; bytes: number; steps: number };
+    expect(result.name).toBe("release-checklist");
+    expect(result.path).toBe(join(dir, "release-checklist", "SKILL.md"));
+    expect(result.steps).toBe(2);
+    expect(result.bytes).toBeGreaterThan(100);
+    // The file should exist and contain expected sections.
+    const { readFileSync, existsSync } = require("node:fs") as typeof import("node:fs");
+    expect(existsSync(result.path)).toBe(true);
+    const content = readFileSync(result.path, "utf8");
+    expect(content).toContain("# release-checklist");
+    expect(content).toContain("## When to use");
+    expect(content).toContain("## Steps");
+    expect(content).toContain("**bash**");
+    expect(content).toContain("**apex_search**");
+    expect(content).toContain("When shipping a new version of apex-pi");
+  });
+
+  test("apex_distill sanitises the skill name (lowercase + safe chars)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "apex-distill-"));
+    testDataDir = dir;
+    const h = require_handlers();
+    const fake = makeFakeClient();
+    h.registerBuiltinHandlers(fake as never);
+    const handler = fake.handlers.get("apex_distill")!;
+    const ctx = makeFakeCtx("t2");
+    const result = (await handler(
+      {
+        name: "Release Checklist!!",
+        skillsDir: dir,
+        steps: [{ tool: "bash", output: "ok" }],
+      },
+      ctx,
+    )) as { name: string; path: string };
+    expect(result.name).toBe("release_checklist__");
+    expect(result.path).toBe(join(dir, "release_checklist__", "SKILL.md"));
+  });
+
+  test("apex_distill rejects empty steps with a clear error", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "apex-distill-"));
+    testDataDir = dir;
+    const h = require_handlers();
+    const fake = makeFakeClient();
+    h.registerBuiltinHandlers(fake as never);
+    const handler = fake.handlers.get("apex_distill")!;
+    const ctx = makeFakeCtx("t3");
+    await expect(
+      handler(
+        { name: "x", skillsDir: dir, steps: [] } as never,
+        ctx,
+      ),
+    ).rejects.toThrow(/steps must contain at least 1/);
+  });
+
+  test("apex_distill rejects missing skillsDir", async () => {
+    const h = require_handlers();
+    const fake = makeFakeClient();
+    h.registerBuiltinHandlers(fake as never);
+    const handler = fake.handlers.get("apex_distill")!;
+    const ctx = makeFakeCtx("t4");
+    await expect(
+      handler(
+        { name: "x", steps: [{ tool: "bash" }] } as never,
+        ctx,
+      ),
+    ).rejects.toThrow(/skillsDir is required/);
+  });
+
+  test("apex_distill checkpoints: re-running the same ctx returns cached result", async () => {
+    // The fake's `step()` returns the cached value on second call. This
+    // simulates the durable behaviour: after the first run, the second
+    // run skips the `write` step entirely.
+    const dir = mkdtempSync(join(tmpdir(), "apex-distill-"));
+    testDataDir = dir;
+    const h = require_handlers();
+    const fake = makeFakeClient();
+    h.registerBuiltinHandlers(fake as never);
+    const handler = fake.handlers.get("apex_distill")!;
+    const params = {
+      name: "cached-skill",
+      skillsDir: dir,
+      steps: [{ tool: "bash", output: "first" }],
+    };
+    const ctx1 = makeFakeCtx("t5");
+    const r1 = (await handler(params, ctx1)) as { path: string; bytes: number };
+    const ctx2 = makeFakeCtx("t5"); // same taskID = same checkpoint store
+    const r2 = (await handler(params, ctx2)) as { path: string; bytes: number };
+    // Both runs return the same path and same byte count, and the file
+    // on disk is unchanged (still the bytes from the first run).
+    expect(r2.path).toBe(r1.path);
+    expect(r2.bytes).toBe(r1.bytes);
+  });
 });
 
 describe("workflows: HTTP routes (disabled)", () => {
@@ -513,6 +624,81 @@ describe("workflows: HTTP routes (enabled)", () => {
     // 200 if the task was still running (cancel won) or 409 if already
     // terminal. Both are acceptable.
     expect([409, 200]).toContain(res.status);
+  });
+
+  test("POST /v1/workflows/distill spawns a task and returns a task_id", async () => {
+    process.env.ABSURD_DATABASE_URL = "postgres://fake";
+    process.env.ABSURD_ENABLED = "1";
+    process.env.SKILLS_DIR = mkdtempSync(join(tmpdir(), "apex-distill-http-"));
+    testDataDir = process.env.SKILLS_DIR;
+    resetConfigForTests();
+    const wf = require_workflows();
+    await wf.startWorkflows();
+    const { Hono } = require("hono") as typeof import("hono");
+    const api = require_api();
+    const app = new Hono();
+    api.mountWorkflows(app);
+    const res = await app.request("http://x/v1/workflows/distill", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "http-test-skill",
+        steps: [{ tool: "bash", output: "ok" }],
+        when_to_use: "When testing the HTTP API.",
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { mode: string; task_id: string };
+    expect(body.mode).toBe("durable");
+    expect(body.task_id).toMatch(/^apex_distill-/);
+    // Wait for the fake worker to finish writing the file.
+    await new Promise((r) => setTimeout(r, 50));
+    const skillPath = join(process.env.SKILLS_DIR, "http-test-skill", "SKILL.md");
+    const { existsSync, readFileSync } = require("node:fs") as typeof import("node:fs");
+    expect(existsSync(skillPath)).toBe(true);
+    const content = readFileSync(skillPath, "utf8");
+    expect(content).toContain("When testing the HTTP API");
+  });
+
+  test("POST /v1/workflows/distill rejects empty steps with 400", async () => {
+    process.env.ABSURD_DATABASE_URL = "postgres://fake";
+    process.env.ABSURD_ENABLED = "1";
+    process.env.SKILLS_DIR = mkdtempSync(join(tmpdir(), "apex-distill-400-"));
+    testDataDir = process.env.SKILLS_DIR;
+    resetConfigForTests();
+    const wf = require_workflows();
+    await wf.startWorkflows();
+    const { Hono } = require("hono") as typeof import("hono");
+    const api = require_api();
+    const app = new Hono();
+    api.mountWorkflows(app);
+    const res = await app.request("http://x/v1/workflows/distill", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "x", steps: [] }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("POST /v1/workflows/distill returns 400 when skillsDir is missing", async () => {
+    process.env.ABSURD_DATABASE_URL = "postgres://fake";
+    process.env.ABSURD_ENABLED = "1";
+    delete process.env.SKILLS_DIR;
+    resetConfigForTests();
+    const wf = require_workflows();
+    await wf.startWorkflows();
+    const { Hono } = require("hono") as typeof import("hono");
+    const api = require_api();
+    const app = new Hono();
+    api.mountWorkflows(app);
+    const res = await app.request("http://x/v1/workflows/distill", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "x", steps: [{ tool: "bash" }] }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string };
+    expect(body.error).toMatch(/skillsDir/);
   });
 
   test("POST /v1/workflows/understand with inline=true runs synchronously", async () => {
