@@ -51,6 +51,7 @@ jobs:
       - name: "Pre-flight: version + apps"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_ACCESS_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           flyctl version
           echo "FLY_APP = ${{ vars.FLY_APP || 'apex-pi' }}"
@@ -59,6 +60,7 @@ jobs:
       - name: Ensure the app exists
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_ACCESS_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_APP: ${{ vars.FLY_APP || 'apex-pi' }}
         run: |
           if ! flyctl status --app "$FLY_APP" >/dev/null 2>&1; then
@@ -73,6 +75,7 @@ jobs:
       - name: Ensure the volume exists
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_ACCESS_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_APP: ${{ vars.FLY_APP || 'apex-pi' }}
         run: |
           if ! flyctl volumes list --app "$FLY_APP" -j 2>/dev/null | grep -q "apex_pi_data"; then
@@ -86,6 +89,7 @@ jobs:
       - name: Apply secrets
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_ACCESS_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_APP: ${{ vars.FLY_APP || 'apex-pi' }}
         run: |
           set -e
@@ -108,6 +112,7 @@ jobs:
       - name: Deploy
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          FLY_ACCESS_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           FLY_APP: ${{ vars.FLY_APP || 'apex-pi' }}
         run: |
           STRAT="${{ inputs.strategy }}"
