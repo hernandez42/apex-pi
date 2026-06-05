@@ -55,7 +55,16 @@ jobs:
         run: |
           flyctl version
           echo "FLY_APP = ${{ vars.FLY_APP || 'apex-pi' }}"
-          flyctl apps list --json | head -c 500 || true
+          echo "=== flyctl auth whoami ==="
+          flyctl auth whoami || echo "(whoami failed)"
+          echo "=== flyctl auth token (sanitized) ==="
+          # Show first 12 + last 8 chars + total length without leaking the secret
+          TOK="$FLY_API_TOKEN"
+          echo "len=${#TOK} head=${TOK:0:12} tail=${TOK: -8}"
+          echo "=== flyctl apps list ==="
+          flyctl apps list --json 2>&1 | head -c 500 || true
+          echo "=== flyctl orgs list ==="
+          flyctl orgs list 2>&1 | head -c 500 || true
 
       - name: Ensure the app exists
         env:
