@@ -47,9 +47,15 @@ export function resolveModel(): Model<any> {
   const baseUrl = process.env.LLM_BASE_URL?.replace(/\/+$/, "");
 
   const apply = (m: Model<any>): Model<any> => {
-    if (baseUrl) {
-      (m as { baseUrl?: string }).baseUrl = baseUrl;
+    if (baseUrl && (m as { baseUrl?: string }).baseUrl !== baseUrl) {
+      // pi-ai ships Model objects as frozen (Object.freeze), so we cannot
+      // mutate `baseUrl` in place. Clone the object with the override
+      // applied. A shallow copy is enough — callers read top-level fields
+      // (id, name, api, baseUrl) and pass the model to `complete()`, which
+      // does not rely on identity.
+      const cloned = { ...m, baseUrl };
       log.info("model.baseUrl.override", { provider, model: id, baseUrl });
+      return cloned as Model<any>;
     }
     return m;
   };

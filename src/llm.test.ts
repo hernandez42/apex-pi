@@ -59,9 +59,9 @@ test("resolveModel maps `openai-compatible` alias to a real model (Bug #2)", asy
 });
 
 test("resolveModel maps other friendly aliases (openai_compatible, oai)", async () => {
+  const { resolveModel } = await import("./llm.ts");
   for (const alias of ["openai_compatible", "oai", "openai-completions"]) {
     process.env.LLM_PROVIDER = alias;
-    const { resolveModel } = await import("./llm.ts?" + alias);
     const m = resolveModel();
     expect(m).toBeDefined();
     expect(m.api).toBeTruthy();
