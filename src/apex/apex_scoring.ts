@@ -1,18 +1,22 @@
 /**
- * apex_scoring — Execution result → fitness score
+ * apex_scoring — 5D-native fitness evaluation
  *
  * Pi-mono Self-Evolution Engine · apex-pi
  *
- * Fitness formula:
- *   fitness = success_rate × invocations^0.3 × recency_decay
+ * Fitness is NOT a stored number. It IS the 5D importance field.
+ * Scoring is a LIVE query → derives fitness from the 5D system.
  *
- * Thresholds:
- *   >= 0.6  → active (keep)
- *   0.3~0.6 → re_distill (rewrite)
- *   < 0.3   → deprecated (淘汰)
+ * The fitness formula maps directly onto 5D fields:
+ *   importance  ←→ fitness score (0..1)
+ *   accessCount ←→ invocation count (usage frequency)
+ *   accessedAt ←→ recency (for decay calculation)
+ *   deltaG     ←→ system-level health
+ *
+ * This means apex_evolver never "stores" fitness — it queries 5D.
  */
 
-import { differenceInHours } from "date-fns";
+import type { MemoryEngine, MemoryHit } from "../memory/index.ts";
+import type { MemoryRecord } from "../memory/types.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -21,175 +25,141 @@ export interface ExecutionResult {
   output?: string;
   error?: string;
   duration_ms: number;
-  tool_calls?: string[];    // tools used during execution
-  context_snapshot?: string; // relevant context at execution time
+  tool_calls?: string[];
+}
+
+export interface FitnessProfile {
+  importance: number;       // current importance in 5D (fitness proxy)
+  accessCount: number;     // how many times this skill was used
+  lastUsed: number;        // epoch ms
+  recencyScore: number;    // 0..1, exponential decay with 30d half-life
+  consistencyScore: number; // tool call pattern consistency
+  systemDeltaG: number;    // 5D system health at scoring time
+  overallFitness: number; // weighted combination
 }
 
 export interface ScoreBreakdown {
-  raw_score: number;         // success → 1, failure → 0
-  recency_score: number;     // time decay factor
-  consistency_score: number; // tool call consistency across runs
-  final_fitness: number;     // weighted combination
+  executionSuccess: boolean;
+  profile: FitnessProfile;
   thresholds: {
-    active: boolean;
-    re_distill: boolean;
-    deprecated: boolean;
+    active: boolean;    // importance >= 0.6
+    reDistill: boolean; // 0.3 <= importance < 0.6
+    deprecated: boolean;// importance < 0.3
   };
 }
 
-export interface SkillStats {
-  invocation_count: number;
-  success_count: number;
-  total_duration_ms: number;
-  last_used: string;        // ISO 8601
-  recent_results: ExecutionResult[];
-}
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-// ─── Config ─────────────────────────────────────────────────────────────────
+const RECENCY_HALF_LIFE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+const THRESHOLD_ACTIVE = 0.6;
+const THRESHOLD_REDISTILL = 0.3;
 
-const RECENCY_HALF_LIFE_HOURS = 72;    // 72h half-life → score halves every 3 days
-const INVOCATION_SLOWDOWN = 0.3;       // exponent on invocation count
-const CONSISTENCY_WEIGHT = 0.1;        // weight for tool call consistency
-const SUCCESS_WEIGHT = 0.6;           // weight for raw success rate
-const RECENCY_WEIGHT = 0.3;           // weight for recency decay
-
-export const THRESHOLD_ACTIVE = 0.6;
-export const THRESHOLD_REDISTILL = 0.3;
+const DIMENSION_WEIGHTS: Record<string, number> = {
+  procedural: 0.40,
+  semantic:   0.25,
+  episodic:   0.20,
+  declarative:0.10,
+  working:    0.05,
+};
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /**
- * Score an execution result and compute the new fitness for a SKILL.
+ * Score a task execution result and compute fitness.
+ * Fitness is derived from 5D fields — not stored separately.
  *
- * @param result      — outcome of the current task execution
- * @param stats       — historical stats for this SKILL
- * @param last_used   — ISO timestamp of last invocation
+ * @param engine  — the 5D memory engine
+ * @param record  — the memory record being scored (from 5D)
+ * @param result  — outcome of current execution
  */
-export function apex_scoring(
-  result: ExecutionResult,
-  stats: SkillStats,
-  last_used: string
-): ScoreBreakdown {
-  const raw_score = result.success ? 1 : 0;
-  const recency_score = compute_recency_decay(last_used);
-  const consistency_score = compute_consistency(result, stats);
+export async function apex_scoring(
+  engine: MemoryEngine,
+  record: MemoryRecord,
+  result: ExecutionResult
+): Promise<ScoreBreakdown> {
+  const now = Date.now();
+  const ageMs = now - record.accessedAt;
+  const recencyScore = Math.exp(-ageMs / RECENCY_HALF_LIFE_MS);
 
-  const final_fitness =
-    raw_score * SUCCESS_WEIGHT +
-    recency_score * RECENCY_WEIGHT +
-    consistency_score * CONSISTENCY_WEIGHT;
+  // Consistency: based on tool call patterns (stored in record.meta)
+  const consistencyScore = compute_consistency(record);
 
-  const clamped = Math.min(1, Math.max(0, final_fitness));
+  // System health from 5D
+  const health = await engine.health();
+  const systemDeltaG = health.deltaG;
+
+  // Overall fitness: importance IS the fitness score in 5D
+  // Bump importance on success, slight decay on failure
+  const importanceDelta = result.success ? 0.05 : -0.1;
+  const overallFitness = Math.max(0, Math.min(1, record.importance + importanceDelta));
 
   return {
-    raw_score,
-    recency_score,
-    consistency_score,
-    final_fitness: clamped,
+    executionSuccess: result.success,
+    profile: {
+      importance: record.importance,
+      accessCount: record.accessCount,
+      lastUsed: record.accessedAt,
+      recencyScore,
+      consistencyScore,
+      systemDeltaG,
+      overallFitness,
+    },
     thresholds: {
-      active: clamped >= THRESHOLD_ACTIVE,
-      re_distill: clamped >= THRESHOLD_REDISTILL && clamped < THRESHOLD_ACTIVE,
-      deprecated: clamped < THRESHOLD_REDISTILL,
+      active: overallFitness >= THRESHOLD_ACTIVE,
+      reDistill: overallFitness >= THRESHOLD_REDISTILL && overallFitness < THRESHOLD_ACTIVE,
+      deprecated: overallFitness < THRESHOLD_REDISTILL,
     },
   };
 }
 
 /**
- * Compute a rolling fitness from historical stats (no new result).
- * Used for SKILLs that haven't been invoked recently.
+ * Score a set of memory hits for task relevance (used by apex_evolver).
+ * Returns aggregate fitness stats across the matched memory pool.
  */
-export function apex_scoring_from_stats(stats: SkillStats): ScoreBreakdown {
-  if (stats.invocation_count === 0) {
-    return {
-      raw_score: 0,
-      recency_score: 0,
-      consistency_score: 0,
-      final_fitness: 0,
-      thresholds: { active: false, re_distill: false, deprecated: true },
-    };
+export async function apex_scoring_pool(
+  engine: MemoryEngine,
+  hits: MemoryHit[]
+): Promise<{
+  avgImportance: number;
+  maxImportance: number;
+  systemDeltaG: number;
+  poolHealth: "healthy" | "degraded" | "critical";
+}> {
+  if (hits.length === 0) {
+    return { avgImportance: 0, maxImportance: 0, systemDeltaG: -1, poolHealth: "critical" };
   }
 
-  const success_rate = stats.success_count / stats.invocation_count;
-  const recency_score = compute_recency_decay(stats.last_used);
-  const avg_duration = stats.total_duration_ms / stats.invocation_count;
+  const health = await engine.health();
+  const deltaG = health.deltaG;
 
-  // Consistency: penalize if avg duration is extremely high (proxy for failures/hangs)
-  const consistency_score = Math.min(1, 5000 / Math.max(avg_duration, 1));
+  const importances = hits.map(h => h.record.importance);
+  const avgImportance = importances.reduce((a, b) => a + b, 0) / importances.length;
+  const maxImportance = Math.max(...importances);
 
-  const final_fitness =
-    success_rate * SUCCESS_WEIGHT +
-    recency_score * RECENCY_WEIGHT +
-    consistency_score * CONSISTENCY_WEIGHT;
+  let poolHealth: "healthy" | "degraded" | "critical";
+  if (deltaG > 0.5 && avgImportance > 0.5) poolHealth = "healthy";
+  else if (deltaG > 0 || avgImportance > 0.3) poolHealth = "degraded";
+  else poolHealth = "critical";
 
-  const clamped = Math.min(1, Math.max(0, final_fitness));
-
-  return {
-    raw_score: success_rate,
-    recency_score,
-    consistency_score,
-    final_fitness: clamped,
-    thresholds: {
-      active: clamped >= THRESHOLD_ACTIVE,
-      re_distill: clamped >= THRESHOLD_REDISTILL && clamped < THRESHOLD_ACTIVE,
-      deprecated: clamped < THRESHOLD_REDISTILL,
-    },
-  };
+  return { avgImportance, maxImportance, systemDeltaG: deltaG, poolHealth };
 }
 
 // ─── Internal ───────────────────────────────────────────────────────────────
 
-/**
- * Recency decay: exponential decay with half-life of RECENCY_HALF_LIFE_HOURS.
- *
- *   recency_decay = 0.5^(hours_since_last_use / half_life)
- *
- * A SKILL used 3 days ago scores 0.5. 6 days ago scores 0.25. 9 days ago scores 0.125.
- */
-function compute_recency_decay(last_used: string): number {
-  if (!last_used) return 0;
+function compute_consistency(record: MemoryRecord): number {
+  // Tool call consistency: stored in record.meta as toolCallPattern
+  const meta = record.meta as Record<string, unknown> | undefined;
+  if (!meta?.toolCallPattern) return 0.5;  // neutral — no data
 
-  let hours: number;
-  try {
-    const lastDate = new Date(last_used);
-    hours = differenceInHours(new Date(), lastDate);
-  } catch {
-    return 0;
-  }
+  const pattern = meta.toolCallPattern as string[];
+  if (pattern.length < 2) return 1;  // single use — assume consistent
 
-  if (hours < 0) return 1;   // future? treat as fresh
-  if (hours > 24 * 30) return 0; // older than 30 days → effectively 0
-
-  return Math.pow(0.5, hours / RECENCY_HALF_LIFE_HOURS);
-}
-
-/**
- * Tool call consistency: how often does this SKILL use the same tools?
- * High consistency → higher score. Chaotic tool usage → penalty.
- *
- * Implemented as: consistency = 1 / (1 + variance_of_tool_call_count)
- * Clamped to [0, 1].
- */
-function compute_consistency(
-  result: ExecutionResult,
-  stats: SkillStats
-): number {
-  if (stats.invocation_count === 0) return 1; // first use — neutral
-
-  const current_tool_count = result.tool_calls?.length ?? 0;
-  if (current_tool_count === 0) return 0.5;   // no tools used — neutral
-
-  // Compute coefficient of variation for tool count across all invocations
-  const counts = stats.recent_results
-    .map(r => r.tool_calls?.length ?? 0)
-    .filter(c => c > 0);
-
-  if (counts.length < 2) return 1; // not enough data — assume consistent
-
-  const mean = counts.reduce((a, b) => a + b, 0) / counts.length;
-  const variance =
-    counts.reduce((sum, c) => sum + Math.pow(c - mean, 2), 0) / counts.length;
+  // Coefficient of variation on tool count
+  const mean = pattern.length;
+  const variance = pattern.reduce((sum, count) => sum + Math.pow(count - mean, 2), 0) / pattern.length;
   const cv = Math.sqrt(variance) / Math.max(mean, 1);
 
-  // CoV of 0 → consistency 1. CoV of 1+ → consistency → 0.
   return Math.max(0, Math.min(1, 1 / (1 + cv)));
 }
+
+export { THRESHOLD_ACTIVE, THRESHOLD_REDISTILL };

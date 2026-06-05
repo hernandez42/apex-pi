@@ -1,300 +1,279 @@
 /**
- * apex_evolver — Fitness threshold check → re_distill or 淘汰
+ * apex_evolver — 5D-native self-evolution engine
  *
  * Pi-mono Self-Evolution Engine · apex-pi
  *
- * Lifecycle:
- *   active       → fitness >= 0.6  → normal operation
- *   re_distill   → 0.3 <= fitness < 0.6 → trigger apex_distill rewrite
- *   deprecated   → fitness < 0.3  → delete SKILL after grace period
+ * Core insight: evolution happens in the 5D system, not in a separate SKILL pool.
  *
- * The evolver runs after every apex_scoring call and decides what action to take.
+ * 5D IS the gene pool:
+ *   - MemoryRecord.importance  ←→  gene fitness
+ *   - MemoryRecord.dimension  ←→  gene type (procedural=skill, semantic=knowledge, etc.)
+ *   - MemoryRecord.accessCount ←→  gene usage frequency
+ *   - graph_edges             ←→  gene regulatory network
+ *   - dream()                 ←→  evolution cycle (decay + promote + dedup)
+ *   - health().deltaG         ←→  system-level fitness indicator
+ *
+ * apex_evolver's job:
+ *   1. Monitor system health (deltaG)
+ *   2. Trigger dream() cycles when evolution is needed
+ *   3. Inject high-importance memories to drive promotion
+ *   4. Manage graph relationships between memories (regulatory network)
+ *   5. Optionally maintain SKILL.md as a materialized cache
+ *
+ * The SKILL.md file is NOT the primary store — it is a human-readable
+ * cache of frequently-accessed procedural memories from 5D.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { createHash } from "node:crypto";
-import { THRESHOLD_ACTIVE, THRESHOLD_REDISTILL, type ScoreBreakdown } from "./apex_scoring.js";
-import { apex_distill } from "./apex_distill.js";
-import type { TaskFingerprint } from "./apex_search.js";
+import type { MemoryEngine } from "../memory/index.ts";
+import type { IngestInput, MemoryRecord } from "../memory/types.ts";
+import type { ScoreBreakdown } from "./apex_scoring.ts";
+import { THRESHOLD_ACTIVE, THRESHOLD_REDISTILL } from "./apex_scoring.ts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 export type EvolutionAction =
-  | { type: "keep"; skill_path: string }
-  | { type: "re_distill"; skill_path: string; reason: string }
-  | { type: "promote"; skill_path: string; new_fitness: number }
-  | { type: "deprecate"; skill_path: string }
-  | { type: "delete"; skill_path: string }
-  | { type: "new_skill"; skill_path: string };  // first-time SKILL created
+  | { type: "keep"; record: MemoryRecord }
+  | { type: "bump_importance"; record: MemoryRecord; newImportance: number }
+  | { type: "trigger_dream"; reason: string }
+  | { type: "demote"; record: MemoryRecord }
+  | { type: "inject"; record: MemoryRecord; reason: string }
+  | { type: "relate"; src: string; rel: string; dst: string };
 
 export interface EvolverContext {
-  task: TaskFingerprint;
+  task: import("./apex_search.js").TaskFingerprint;
   result: import("./apex_scoring.js").ExecutionResult;
-  stats: import("./apex_scoring.js").SkillStats;
+  record: MemoryRecord | null;  // null → first-time task, no existing memory
   score: ScoreBreakdown;
-  skill_path?: string; // undefined → new SKILL
 }
 
-export interface EvolverConfig {
-  skills_dir: string;
-  grace_period_invocations: number;  // how many calls before delete after deprecate
-  max_skills: number;                // pool size limit → trigger culling of lowest fitness
+export interface EvolverStats {
+  systemDeltaG: number;
+  poolHealth: "healthy" | "degraded" | "critical";
+  totalMemories: number;
+  proceduralCount: number;
+  semanticCount: number;
+  dreamTriggered: boolean;
+  lastDreamAt: number | null;
 }
 
-// ─── Defaults ────────────────────────────────────────────────────────────────
+// ─── Config ─────────────────────────────────────────────────────────────────
 
-const DEFAULT_CONFIG: EvolverConfig = {
-  skills_dir: join(process.cwd(), "skills"),
-  grace_period_invocations: 3,
-  max_skills: 200,
-};
+const DREAM_TRIGGER_DELTA_G = 0.2;     // trigger dream when deltaG < this
+const PROMOTION_IMPORTANCE = 0.55;     // working→semantic threshold
+const GRAPH_EDGE_WEIGHT = 0.8;         // default relation strength
 
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 /**
- * Given an execution result + score, decide what evolution action to take.
+ * Core evolution step: given an execution result, evolve the 5D memory system.
  *
- * This is the core decision function of the self-evolution engine.
+ * @param engine  — the 5D memory engine
+ * @param ctx     — evolution context (task, result, record, score)
+ * @returns evolution actions taken
  */
 export async function apex_evolve(
-  ctx: EvolverContext,
-  config: Partial<EvolverConfig> = {}
-): Promise<EvolutionAction> {
-  const cfg = { ...DEFAULT_CONFIG, ...config };
+  engine: MemoryEngine,
+  ctx: EvolverContext
+): Promise<EvolutionAction[]> {
+  const actions: EvolutionAction[] = [];
 
-  // Ensure skills directory exists
-  ensure_skills_dir(cfg.skills_dir);
+  // ── Step 1: Ingest the new experience ────────────────────────────────
+  const record = await ingest_experience(engine, ctx);
 
-  const { score, skill_path } = ctx;
+  // ── Step 2: Score the resulting importance ──────────────────────────
+  if (!record) return actions;
 
-  // ── Case 1: No existing SKILL — create first-time SKILL ──
-  if (!skill_path) {
-    const new_path = await apex_distill(ctx.task, ctx.result, ctx.stats, {
-      skills_dir: cfg.skills_dir,
-      status: "active",
+  const importance = record.importance;
+
+  // ── Step 3: Decide based on thresholds ────────────────────────────
+
+  if (importance >= THRESHOLD_ACTIVE) {
+    // Healthy — bump importance slightly on success
+    if (ctx.result.success) {
+      const newImportance = Math.min(1, importance + 0.05);
+      await engine.ingest({
+        id: record.id,
+        content: record.content,
+        dimension: record.dimension,
+        tags: record.tags,
+        importance: newImportance,
+        meta: record.meta,
+      });
+      actions.push({ type: "bump_importance", record, newImportance });
+    }
+    actions.push({ type: "keep", record });
+  } else if (importance >= THRESHOLD_REDISTILL) {
+    // Degraded — bump up but watch carefully
+    const newImportance = Math.min(1, importance + 0.02);
+    await engine.ingest({
+      id: record.id,
+      content: record.content,
+      dimension: record.dimension,
+      tags: record.tags,
+      importance: newImportance,
+      meta: record.meta,
     });
-    return { type: "new_skill", skill_path: new_path };
-  }
+    actions.push({ type: "bump_importance", record, newImportance });
 
-  // ── Case 2: Active SKILL performing well ──
-  if (score.thresholds.active) {
-    // Bump fitness slightly on success, hold on failure
-    const new_fitness = ctx.result.success
-      ? Math.min(1, score.final_fitness + 0.05)
-      : score.final_fitness;
-
-    await update_skill_fitness(skill_path, {
-      fitness_score: new_fitness,
-      invocation_count: ctx.stats.invocation_count + 1,
-      last_used: new Date().toISOString(),
+    // Check if system needs dream
+    const health = await engine.health();
+    if (health.deltaG < DREAM_TRIGGER_DELTA_G) {
+      await engine.dream();
+      actions.push({ type: "trigger_dream", reason: `deltaG=${health.deltaG.toFixed(3)} below ${DREAM_TRIGGER_DELTA_G}` });
+    }
+  } else {
+    // Critical — inject a high-importance re-analysis of this problem
+    const injectRecord = await engine.ingest({
+      content: `[RE-EVOLVE] Task "${ctx.task.intent}" failed. Root cause analysis: ${ctx.result.error ?? "unknown"}. Re-examine approach.`,
+      dimension: "episodic",
+      tags: ["evolution:critical", `task:${ctx.task.intent}`],
+      importance: 0.9,
+      meta: {
+        taskIntent: ctx.task.intent,
+        taskContext: ctx.task.context,
+        executionError: ctx.result.error,
+        lastAttempt: new Date().toISOString(),
+      },
     });
+    actions.push({ type: "inject", record: injectRecord, reason: `importance=${importance.toFixed(3)} < ${THRESHOLD_REDISTILL}` });
 
-    return { type: "keep", skill_path };
-  }
-
-  // ── Case 3: Re-distill needed ──
-  if (score.thresholds.re_distill) {
-    await mark_skill_status(skill_path, "re_distilling");
-
-    // Re-distill: rewrite the SKILL with the new successful path
-    await apex_distill(ctx.task, ctx.result, ctx.stats, {
-      skills_dir: cfg.skills_dir,
-      status: "active",
-      existing_path: skill_path,
-    });
-
-    return {
-      type: "re_distill",
-      skill_path,
-      reason: `fitness ${score.final_fitness.toFixed(2)} below ${THRESHOLD_ACTIVE}, rewrite triggered`,
-    };
-  }
-
-  // ── Case 4: Deprecate ──
-  if (score.thresholds.deprecated) {
-    const current = load_skill_metadata(skill_path);
-    const invocation_count = current?.invocation_count ?? 0;
-
-    if (invocation_count >= cfg.grace_period_invocations) {
-      // Hard delete after grace period
-      await delete_skill(skill_path);
-      return { type: "delete", skill_path };
-    } else {
-      // Mark as deprecated but keep through grace period
-      await mark_skill_status(skill_path, "deprecated");
-      return { type: "deprecate", skill_path };
+    // Try to establish causal relation to help dream() discover the issue
+    if (ctx.result.error) {
+      await engine.relate(
+        injectRecord.id,
+        "caused_by",
+        `error:${ctx.result.error.slice(0, 50)}`,
+        0.6,
+        "episodic"
+      );
+      actions.push({ type: "relate", src: injectRecord.id, rel: "caused_by", dst: `error:${ctx.result.error.slice(0, 50)}` });
     }
   }
 
-  // ── Fallback: keep ──
-  return { type: "keep", skill_path };
+  return actions;
 }
 
 /**
- * Periodic culling: prune the lowest-fitness SKILLs if pool exceeds max_skills.
- * Run this on a schedule (e.g., every 100 tasks or daily).
+ * System-level health check and maintenance.
+ * Call this periodically (e.g., every 100 tasks or daily).
+ *
+ * Returns current system stats and actions taken.
  */
-export async function apex_evolver_cull(
-  config: Partial<EvolverConfig> = {}
-): Promise<{ culled: number; deleted: string[] }> {
-  const cfg = { ...DEFAULT_CONFIG, ...config };
-  ensure_skills_dir(cfg.skills_dir);
+export async function apex_evolver_maintain(
+  engine: MemoryEngine
+): Promise<{ stats: EvolverStats; actions: EvolutionAction[] }> {
+  const actions: EvolutionAction[] = [];
+  const stats = await engine.stats();
+  const health = await engine.health();
 
-  const skills = list_skills(cfg.skills_dir);
-  if (skills.length <= cfg.max_skills) {
-    return { culled: 0, deleted: [] };
+  let poolHealth: "healthy" | "degraded" | "critical";
+  if (health.deltaG > 0.5) poolHealth = "healthy";
+  else if (health.deltaG > 0) poolHealth = "degraded";
+  else poolHealth = "critical";
+
+  const evolverStats: EvolverStats = {
+    systemDeltaG: health.deltaG,
+    poolHealth,
+    totalMemories: stats.total,
+    proceduralCount: stats.byDimension.procedural ?? 0,
+    semanticCount: stats.byDimension.semantic ?? 0,
+    dreamTriggered: false,
+    lastDreamAt: stats.lastDreamAt,
+  };
+
+  // If system is degraded, trigger a dream cycle
+  if (health.deltaG < DREAM_TRIGGER_DELTA_G) {
+    const dreamResult = await engine.dream();
+    actions.push({
+      type: "trigger_dream",
+      reason: `deltaG=${health.deltaG.toFixed(3)} < ${DREAM_TRIGGER_DELTA_G} | decayed=${dreamResult.decayed} promoted=${dreamResult.promoted}`,
+    });
+    evolverStats.dreamTriggered = true;
   }
 
-  // Sort by fitness ascending (lowest first)
-  skills.sort((a, b) => a.fitness_score - b.fitness_score);
-
-  const to_delete = skills.slice(0, skills.length - cfg.max_skills);
-  const deleted: string[] = [];
-
-  for (const skill of to_delete) {
-    if (skill.status === "deprecated") {
-      await delete_skill(skill.path);
-      deleted.push(skill.path);
-    }
+  // If procedural pool is too small, inject a skill synthesis prompt
+  if ((stats.byDimension.procedural ?? 0) < 5) {
+    const injectRecord = await engine.ingest({
+      content: `[GROW] Procedural memory pool is sparse (${stats.byDimension.procedural ?? 0} skills). Look for successful patterns in recent episodic memories and distill them into procedural skills.`,
+      dimension: "semantic",
+      tags: ["evolution:growth", "pool:sparse"],
+      importance: 0.8,
+    });
+    actions.push({ type: "inject", record: injectRecord, reason: "procedural pool too small" });
   }
 
-  return { culled: to_delete.length, deleted };
+  return { stats: evolverStats, actions };
 }
 
-// ─── Internal helpers ───────────────────────────────────────────────────────
+// ─── Internal ───────────────────────────────────────────────────────────────
 
-function ensure_skills_dir(dir: string): void {
-  try {
-    mkdirSync(dir, { recursive: true });
-  } catch {}
-}
+/**
+ * Ingest a new experience into 5D memory.
+ * Determines the right dimension based on execution result.
+ */
+async function ingest_experience(
+  engine: MemoryEngine,
+  ctx: EvolverContext
+): Promise<MemoryRecord | null> {
+  const { task, result } = ctx;
 
-async function update_skill_fitness(
-  path: string,
-  updates: Partial<{
-    fitness_score: number;
-    invocation_count: number;
-    last_used: string;
-    success_rate: number;
-  }>
-): Promise<void> {
-  try {
-    const content = readFileSync(path, "utf-8");
-    const updated = update_frontmatter(content, updates);
-    writeFileSync(path, updated, "utf-8");
-  } catch (e) {
-    console.error(`[apex_evolver] failed to update fitness for ${path}:`, e);
+  // Determine dimension based on task type
+  let dimension: import("../memory/types.ts").MemoryDimension;
+  let importance: number;
+  let tags: string[];
+
+  if (result.success) {
+    dimension = "procedural";  // successful task → skill
+    importance = 0.5;
+    tags = [`task:${task.intent}`, "evolution:success"];
+  } else {
+    dimension = "episodic";   // failed task → event for analysis
+    importance = 0.7;         // failures get higher importance for attention
+    tags = [`task:${task.intent}`, "evolution:failure"];
   }
+
+  const content = build_experience_content(task, result);
+  const meta: Record<string, unknown> = {
+    taskIntent: task.intent,
+    taskContext: task.context,
+    executionSuccess: result.success,
+    duration_ms: result.duration_ms,
+    tool_calls: result.tool_calls ?? [],
+  };
+
+  // Try to dedupe by hashing content
+  const rec = await engine.ingest({
+    content,
+    dimension,
+    tags,
+    importance,
+    meta,
+  });
+
+  return rec;
 }
 
-async function mark_skill_status(
-  path: string,
-  status: "active" | "re_distilling" | "deprecated"
-): Promise<void> {
-  await update_skill_fitness(path, {});
-  try {
-    const content = readFileSync(path, "utf-8");
-    const updated = update_frontmatter(content, { status });
-    writeFileSync(path, updated, "utf-8");
-  } catch (e) {
-    console.error(`[apex_evolver] failed to mark status for ${path}:`, e);
-  }
-}
-
-async function delete_skill(path: string): Promise<void> {
-  try {
-    unlinkSync(path);
-  } catch (e) {
-    console.error(`[apex_evolver] failed to delete ${path}:`, e);
-  }
-}
-
-interface SkillSummary {
-  path: string;
-  fitness_score: number;
-  status: "active" | "re_distilling" | "deprecated";
-  invocation_count: number;
-}
-
-function list_skills(dir: string): SkillSummary[] {
-  try {
-    return readdirSync(dir)
-      .filter(f => f.endsWith(".md"))
-      .map(f => {
-        const path = join(dir, f);
-        const meta = load_skill_metadata(path);
-        return {
-          path,
-          fitness_score: meta?.fitness_score ?? 0,
-          status: meta?.status ?? "active",
-          invocation_count: meta?.invocation_count ?? 0,
-        };
-      });
-  } catch {
-    return [];
-  }
-}
-
-interface SkillMeta {
-  fitness_score: number;
-  invocation_count: number;
-  success_rate: number;
-  last_used: string;
-  source_task: string;
-  status: "active" | "re_distilling" | "deprecated";
-  tags: string[];
-}
-
-function load_skill_metadata(path: string): SkillMeta | null {
-  try {
-    const content = readFileSync(path, "utf-8");
-    const match = content.match(/^---\n([\s\S]*?)\n---\n/);
-    if (!match) return null;
-    const raw = match[1];
-    const meta: Record<string, string | number | string[]> = {};
-    for (const line of raw.split("\n")) {
-      const colon = line.indexOf(":");
-      if (colon === -1) continue;
-      const key = line.slice(0, colon).trim();
-      const value = line.slice(colon + 1).trim();
-      meta[key] = value;
-    }
-    return {
-      fitness_score: Number(meta["fitness_score"] ?? 0),
-      invocation_count: Number(meta["invocation_count"] ?? 0),
-      success_rate: Number(meta["success_rate"] ?? 0),
-      last_used: String(meta["last_used"] ?? ""),
-      source_task: String(meta["source_task"] ?? ""),
-      status: (meta["status"] as SkillMeta["status"]) ?? "active",
-      tags: String(meta["tags"] ?? "")
-        .split(",")
-        .map(t => t.trim())
-        .filter(Boolean),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function update_frontmatter(
-  content: string,
-  updates: Record<string, string | number | null>
+function build_experience_content(
+  task: import("./apex_search.js").TaskFingerprint,
+  result: import("./apex_scoring.js").ExecutionResult
 ): string {
-  const match = content.match(/^(---\n[\s\S]*?\n---\n)/);
-  if (!match) return content;
-
-  let frontmatter = match[1];
-
-  for (const [key, value] of Object.entries(updates)) {
-    if (value === null) continue;
-    const regex = new RegExp(`^(${key}:\\s*).*$`, "m");
-    if (regex.test(frontmatter)) {
-      frontmatter = frontmatter.replace(regex, `$1${value}`);
-    } else {
-      frontmatter += `${key}: ${value}\n`;
-    }
+  if (result.success) {
+    return [
+      `# SKILL: ${task.intent}`,
+      `> Context: ${task.context}`,
+      ``,
+      `## Successful Execution`,
+      `Tool calls: ${(result.tool_calls ?? []).join(" → ")}`,
+      `Output: ${result.output ?? "(success)"}`,
+    ].join("\n");
+  } else {
+    return [
+      `# FAILED TASK: ${task.intent}`,
+      `> Context: ${task.context}`,
+      ``,
+      `## Failed Execution`,
+      `Error: ${result.error ?? "(unknown)"}`,
+      `Duration: ${result.duration_ms}ms`,
+    ].join("\n");
   }
-
-  return content.replace(match[1], frontmatter);
 }

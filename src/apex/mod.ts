@@ -3,135 +3,138 @@
  *
  * Pi-mono Self-Evolution Engine · apex-pi
  *
- * Entry point for the apex self-evolution loop.
- * Integrates apex_search + apex_executor + apex_scoring + apex_evolver + apex_distill.
+ * Entry point. Integrates all apex modules with the 5D memory engine.
  *
- * Usage:
- *   import { apex_run } from "src/apex/mod.ts";
- *   await apex_run(task, executor);
+ * Architecture (5D-native):
+ *
+ *   Task → apex_search(5D)
+ *              ↓
+ *        apex_executor → pi-mono providers
+ *              ↓
+ *        apex_distill → 5D procedural memory (primary store)
+ *              ↓                    ↕ optional SKILL.md cache
+ *        apex_scoring → derive fitness from 5D importance
+ *              ↓
+ *        apex_evolver → evolve 5D via ingest + dream + relate
+ *
+ * The 5D system IS the Gene/Genome equivalent:
+ *   importance  ←→ fitness
+ *   dream()    ←→ evolution cycle
+ *   deltaG     ←→ system health / selection pressure
+ *   graph      ←→ regulatory network
  */
 
-import { apex_search, type TaskFingerprint } from "./apex_search.js";
-import { apex_scoring, THRESHOLD_ACTIVE } from "./apex_scoring.js";
-import { apex_evolve, apex_evolver_cull } from "./apex_evolver.js";
-import { apex_distill } from "./apex_distill.js";
+import type { MemoryEngine } from "../memory/index.ts";
+import type { MemoryRecord } from "../memory/types.ts";
+import { apex_search, apex_search_best_skill, type TaskFingerprint } from "./apex_search.js";
+import { apex_scoring, apex_scoring_pool, type ExecutionResult } from "./apex_scoring.js";
+import { apex_evolve, apex_evolver_maintain, type EvolutionAction, type EvolverStats } from "./apex_evolver.js";
+import { apex_distill, type DistillResult } from "./apex_distill.js";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
+// ─── Public API ─────────────────────────────────────────────────────────────
 
-export type { TaskFingerprint, SkillMatch } from "./apex_search.js";
-export type { ExecutionResult, ScoreBreakdown } from "./apex_scoring.js";
-export type { EvolutionAction } from "./apex_evolver.js";
+export type { TaskFingerprint } from "./apex_search.js";
+export type { ExecutionResult } from "./apex_scoring.js";
+export type { EvolutionAction, EvolverStats } from "./apex_evolver.js";
 
 export interface ApexConfig {
-  min_similarity: number;
-  max_skills: number;
-  grace_period_invocations: number;
+  minImportance: number;      // minimum importance for SKILL reuse
+  dreamTriggerDeltaG: number; // trigger dream when deltaG < this
+  cacheSkills: boolean;       // write SKILL.md cache on distill
 }
 
 export interface ApexResult {
-  used_skill: boolean;
-  skill_path: string | null;
-  execution_result: import("./apex_scoring.js").ExecutionResult;
-  score: import("./apex_scoring.js").ScoreBreakdown;
-  action: import("./apex_evolver.js").EvolutionAction;
+  usedSkill: boolean;
+  record: MemoryRecord | null;
+  distillResult: DistillResult | null;
+  actions: EvolutionAction[];
+  fitness: number;
 }
-
-// ─── Public API ─────────────────────────────────────────────────────────────
 
 /**
  * Run one apex self-evolution cycle.
  *
- * @param task      — incoming task
- * @param executor  — async function(task) → ExecutionResult
- * @param config    — optional apex config
+ * @param engine   — the 5D memory engine
+ * @param task     — incoming task
+ * @param executor — async function(task) → ExecutionResult
+ * @param config   — optional apex config
  */
 export async function apex_run(
+  engine: MemoryEngine,
   task: TaskFingerprint,
-  executor: (task: TaskFingerprint) => Promise<import("./apex_scoring.js").ExecutionResult>,
+  executor: (task: TaskFingerprint) => Promise<ExecutionResult>,
   config: Partial<ApexConfig> = {}
 ): Promise<ApexResult> {
-  // Step 1: Search SKILL pool
-  const match = await apex_search(task, { minSimilarity: config.min_similarity ?? 0.4 });
-  const best_match = match[0] ?? null;
+  // Step 1: Search 5D for relevant skills
+  const searchResult = await apex_search(engine, task, { systemHealth: true });
+  const bestSkill = await apex_search_best_skill(
+    engine,
+    task,
+    { minImportance: config.minImportance ?? 0.3 }
+  );
 
-  // Step 2: Execute (via SKILL path if found, or cold-start)
+  // Step 2: Execute the task
   const result = await executor(task);
 
-  // Step 3: Get or init stats for this SKILL
-  const stats = best_match
-    ? load_stats_from_skill(best_match.content)
-    : empty_stats();
+  // Step 3: Distill into 5D
+  const distillResult = await apex_distill(engine, task, result, {
+    writeCache: config.cacheSkills ?? true,
+  });
 
-  // Step 4: Score execution result
-  const score = apex_scoring(result, stats, new Date().toISOString());
+  // Step 4: Score
+  let fitness = distillResult.record.importance;
+  let scoreBreakdown: ReturnType<typeof apex_scoring> | null = null;
 
-  // Step 5: Evolve — decide what to do with this SKILL
-  const action = await apex_evolve({
+  if (bestSkill?.hit.record) {
+    scoreBreakdown = await apex_scoring(engine, bestSkill.hit.record, result);
+    fitness = scoreBreakdown.profile.overallFitness;
+  }
+
+  // Step 5: Evolve
+  const actions = await apex_evolve(engine, {
     task,
     result,
-    stats,
-    score,
-    skill_path: best_match?.path,
+    record: bestSkill?.hit.record ?? null,
+    score: scoreBreakdown ?? {
+      executionSuccess: result.success,
+      profile: {
+        importance: distillResult.record.importance,
+        accessCount: distillResult.record.accessCount,
+        lastUsed: distillResult.record.accessedAt,
+        recencyScore: 1,
+        consistencyScore: 0.5,
+        systemDeltaG: searchResult.systemDeltaG,
+        overallFitness: distillResult.record.importance,
+      },
+      thresholds: {
+        active: distillResult.record.importance >= 0.6,
+        reDistill: distillResult.record.importance >= 0.3 && distillResult.record.importance < 0.6,
+        deprecated: distillResult.record.importance < 0.3,
+      },
+    },
   });
 
   return {
-    used_skill: !!best_match,
-    skill_path: best_match?.path ?? null,
-    execution_result: result,
-    score,
-    action,
+    usedSkill: !!bestSkill,
+    record: distillResult.record,
+    distillResult,
+    actions,
+    fitness,
   };
 }
 
 /**
- * Periodic maintenance: cull low-fitness SKILLs when pool exceeds limit.
+ * Periodic maintenance: check system health and trigger evolution if needed.
  * Call this on a schedule (e.g., daily or every 100 tasks).
  */
 export async function apex_maintain(
-  config: Partial<ApexConfig> = {}
-): Promise<{ culled: number; deleted: string[] }> {
-  return apex_evolver_cull({
-    max_skills: config.max_skills ?? 200,
-  });
+  engine: MemoryEngine
+): Promise<{ stats: EvolverStats; actions: EvolutionAction[] }> {
+  return apex_evolver_maintain(engine);
 }
 
-// ─── Internal helpers ───────────────────────────────────────────────────────
-
-import type { SkillStats, ExecutionResult } from "./apex_scoring.js";
-
-function empty_stats(): SkillStats {
-  return {
-    invocation_count: 0,
-    success_count: 0,
-    total_duration_ms: 0,
-    last_used: new Date().toISOString(),
-    recent_results: [],
-  };
-}
-
-function load_stats_from_skill(content: string): SkillStats {
-  const match = content.match(/^---\n([\s\S]*?)\n---\n/);
-  if (!match) return empty_stats();
-  const raw = match[1];
-  const meta: Record<string, string> = {};
-  for (const line of raw.split("\n")) {
-    const colon = line.indexOf(":");
-    if (colon === -1) continue;
-    meta[line.slice(0, colon).trim()] = line.slice(colon + 1).trim();
-  }
-  const invocations = Number(meta["invocation_count"] ?? 0);
-  const success_rate = Number(meta["success_rate"] ?? 0);
-  return {
-    invocation_count: invocations,
-    success_count: Math.round(success_rate * invocations),
-    total_duration_ms: 0,
-    last_used: meta["last_used"] ?? new Date().toISOString(),
-    recent_results: [],
-  };
-}
-
-// Re-export all modules for external use
-export { apex_search, apex_search_best } from "./apex_search.js";
-export { apex_scoring, apex_scoring_from_stats, THRESHOLD_ACTIVE, THRESHOLD_REDISTILL } from "./apex_scoring.js";
-export { apex_evolve, apex_evolver_cull } from "./apex_evolver.js";
-export { apex_distill, apex_distill_self_test } from "./apex_distill.js";
+// Re-export all modules
+export { apex_search, apex_search_best_skill } from "./apex_search.js";
+export { apex_scoring, apex_scoring_pool } from "./apex_scoring.js";
+export { apex_evolve, apex_evolver_maintain } from "./apex_evolver.js";
+export { apex_distill } from "./apex_distill.js";
