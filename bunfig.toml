@@ -7,8 +7,8 @@ exact = false
 disable = false
 
 [test]
-# Memory + codegraph tests need a writable temp dir.
-preload = []
+# Memory + codegraph tests need a writable temp dir (mkdtempSync in beforeAll).
+# preload intentionally omitted — empty arrays are rejected by Bun's bunfig parser.
 
 [run]
 # Bun tries to use .env automatically; we read it through config.ts instead.
