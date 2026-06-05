@@ -349,12 +349,12 @@ export class MemoryStore {
     const merged = new Map<string, Scored>();
 
     for (const r of bm25Rows) {
-      const prev = merged.get(r.id) ?? { id: r.id, bm25: 0, graph: 0, lex: 0, recency: 0 };
+      const prev = merged.get(r.id) ?? { id: r.id, bm25: 0, graph: 0, lexical: 0, recency: 0 };
       prev.bm25 = -r.bm25; // bm25() returns negative (lower = better); flip to positive
       merged.set(r.id, prev);
     }
     for (const id of graphIds) {
-      const prev = merged.get(id) ?? { id, bm25: 0, graph: 0, lex: 0, recency: 0 };
+      const prev = merged.get(id) ?? { id, bm25: 0, graph: 0, lexical: 0, recency: 0 };
       prev.graph = 1;
       merged.set(id, prev);
     }
@@ -363,7 +363,7 @@ export class MemoryStore {
       const rec = this.get(id);
       if (!rec) continue;
       const e = merged.get(id)!;
-      e.lex = jaccard(rec.content);
+      e.lexical = jaccard(rec.content);
       const ageDays = (now - rec.createdAt) / 86_400_000;
       e.recency = Math.exp(-ageDays / 30);
     }

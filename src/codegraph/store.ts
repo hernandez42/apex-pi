@@ -98,7 +98,7 @@ export class Codegraph {
   readonly db: Database;
   private root: string | undefined;
   private lastIndexedAt: number | null = null;
-  private opts: CodegraphOptions;
+  private opts: Required<Pick<CodegraphOptions, "maxFileKb" | "maxFiles">> & Pick<CodegraphOptions, "dataDir">;
 
   constructor(opts: CodegraphOptions) {
     mkdirSync(opts.dataDir, { recursive: true });
@@ -209,7 +209,7 @@ export class Codegraph {
 
   searchSymbol(query: string, limit = 20): Symbol[] {
     const rows = this.db
-      .query<Record<string, unknown>, [string]>(
+      .query<Record<string, unknown>, [string, number]>(
         "SELECT * FROM symbols WHERE name LIKE ? ORDER BY name LIMIT ?",
       )
       .all(`%${query}%`, limit);

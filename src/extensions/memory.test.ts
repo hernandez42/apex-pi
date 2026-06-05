@@ -46,7 +46,7 @@ test("apex_ingest tool stores a record", async () => {
   installApexExtensions(h);
   const tool = h.tools().find((t) => t.name === "apex_ingest")!;
   const res = await tool.execute("call_test", { content: "hello test world", dimension: "semantic" }, undefined, undefined);
-  expect(res.isError).toBeFalsy();
+  expect((res as { isError?: boolean }).isError).toBeFalsy();
   const engine = getMemoryEngine(getStore()!);
   const hits = await engine.search({ query: "hello test", topK: 1 });
   expect(hits[0]!.record.content).toBe("hello test world");

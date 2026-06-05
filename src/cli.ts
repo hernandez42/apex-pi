@@ -105,7 +105,7 @@ async function oneShot(prompt: string): Promise<number> {
   boot();
   const agent = getAgent();
   let full = "";
-  const sub = agent.subscribe((ev) => {
+  const sub = agent.subscribe((ev: import("@earendil-works/pi-agent-core").AgentEvent) => {
     if (ev.type === "message_update") {
       const mue = (ev as { assistantMessageEvent?: { type: string; delta?: string } }).assistantMessageEvent;
       if (mue?.type === "text_delta" && mue.delta) {

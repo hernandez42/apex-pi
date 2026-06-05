@@ -23,7 +23,7 @@ export function registerUnderstandTool(api: ApexExtensionAPI): void {
     }),
     async execute(_id, params) {
       const p = String(params.path ?? "");
-      if (!p) return { content: [{ type: "text", text: "path is required" }], details: { error: "no_path" }, isError: true };
+      if (!p) return { content: [{ type: "text", text: "path is required" }], details: { error: "no_path", scanned: undefined, symbols: undefined } as any, isError: true };
       const root = isAbsolute(p) ? p : resolve(process.cwd(), p);
       const r = await understand({
         root,
@@ -32,7 +32,7 @@ export function registerUnderstandTool(api: ApexExtensionAPI): void {
         graphOnly: Boolean(params.graph_only),
       });
       const text = `# Summary\n${r.summary}\n\n# Hotspots\n${r.hotspots.map((h) => `- ${h.file} (${h.symbols} symbols, ${h.exports} exports)`).join("\n")}\n\n# Tours\n${r.tours.map((t) => `## ${t.title}\n${t.steps.map((s) => `- ${s.symbol} @ ${s.file}:${s.line}`).join("\n")}`).join("\n")}`;
-      return { content: [{ type: "text", text }], details: { scanned: r.scanned, symbols: r.symbols } };
+      return { content: [{ type: "text", text }], details: { error: undefined, scanned: r.scanned, symbols: r.symbols } as any };
     },
   });
 }

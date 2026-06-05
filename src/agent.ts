@@ -20,7 +20,7 @@ import { installApexExtensions, INSTINCTS, BASE_PROMPT, createExtensionHost } fr
 import { getMemoryEngine } from "./memory/index.ts";
 import { log } from "./log.ts";
 
-let agent: Agent<any> | undefined;
+let agent: Agent | undefined;
 let host: ReturnType<typeof createExtensionHost> | undefined;
 let bootstrapped = false;
 
@@ -44,10 +44,10 @@ function getHost(): ReturnType<typeof createExtensionHost> {
 export function resolveModel(): Model<any> {
   const cfg = config().llm;
   try {
-    return getModel(cfg.provider, cfg.model);
+    return getModel(cfg.provider as never, cfg.model);
   } catch (e) {
     log.warn("model.resolve.fail", { provider: cfg.provider, model: cfg.model, err: (e as Error).message });
-    return getModel("openai", "gpt-4o-mini");
+    return getModel("openai" as never, "gpt-4o-mini");
   }
 }
 
@@ -58,7 +58,7 @@ export interface AgentOptions {
 }
 
 /** Build (or return cached) Agent instance. */
-export function getAgent(opts: AgentOptions = {}): Agent<any> {
+export function getAgent(opts: AgentOptions = {}): Agent {
   if (agent) return agent;
   const cfg = config();
   const h = getHost();
@@ -78,7 +78,7 @@ export function getAgent(opts: AgentOptions = {}): Agent<any> {
   // Self-repair: when a tool returns isError, log the failure into memory
   // as a `procedural` anti-pattern. The dreamer sweep will eventually
   // promote repeated patterns into `semantic` knowledge.
-  agent.subscribe(async (ev) => {
+  agent.subscribe(async (ev: AgentEvent) => {
     if (ev.type === "tool_execution_end" && (ev as { isError?: boolean }).isError) {
       const store = getStore();
       if (!store) return;
@@ -120,7 +120,7 @@ export async function* streamAgent(prompt: string, opts: AgentOptions = {}): Asy
   const queue: AgentEvent[] = [];
   let resolveNext: ((v: IteratorResult<AgentEvent>) => void) | null = null;
   let done = false;
-  const unsub = a.subscribe((ev) => {
+  const unsub = a.subscribe((ev: AgentEvent) => {
     if (done) return;
     if (resolveNext) {
       const r = resolveNext;
@@ -132,7 +132,7 @@ export async function* streamAgent(prompt: string, opts: AgentOptions = {}): Asy
   });
   try {
     // Kick off the prompt in the background.
-    a.prompt(prompt).catch((e) => log.error("agent.prompt.err", { err: (e as Error).message }));
+    a.prompt(prompt).catch((e: Error) => log.error("agent.prompt.err", { err: (e as Error).message }));
     while (true) {
       if (queue.length) {
         yield queue.shift()!;

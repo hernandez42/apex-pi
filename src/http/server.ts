@@ -7,7 +7,8 @@
 import { Hono } from "hono";
 import { config } from "../config.ts";
 import { log } from "../log.ts";
-import { getAgent, getMemoryEngine } from "../agent.ts";
+import { getAgent } from "../agent.ts";
+import { getMemoryEngine } from "../memory/index.ts";
 import { getStore } from "../bootstrap.ts";
 import { getCodegraph } from "../codegraph/index.ts";
 import { understand } from "../understand/index.ts";
@@ -51,7 +52,7 @@ export function createApp(): Hono {
           controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
         try {
           const agent = getAgent();
-          const sub = agent.subscribe((ev) => {
+          const sub = agent.subscribe((ev: import("@earendil-works/pi-agent-core").AgentEvent) => {
             // Forward every relevant event; the client filters.
             send(ev.type, ev);
           });

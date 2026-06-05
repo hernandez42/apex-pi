@@ -21,25 +21,26 @@ export function registerMemoryTools(api: ApexExtensionAPI): void {
   const engine = (): MemoryEngine => getMemoryEngine(getStore()!);
 
   // ───── apex_search ────────────────────────────────────────────────────
+  const apexSearchParams = Type.Object({
+    query: Type.String({ description: "Free-form natural-language query." }),
+    top_k: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 6 })),
+    dimensions: Type.Optional(Type.Array(DIM)),
+    expand_graph: Type.Optional(Type.Boolean({ default: true })),
+  });
   api.registerTool({
     name: "apex_search",
     label: "Apex Memory Search",
     description:
       "Hybrid search over the 5D memory store. Returns hits with sources (bm25/graph/lexical/recency) and a 0..1 fused score.",
-    parameters: Type.Object({
-      query: Type.String({ description: "Free-form natural-language query." }),
-      top_k: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 6 })),
-      dimensions: Type.Optional(Type.Array(DIM)),
-      expand_graph: Type.Optional(Type.Boolean({ default: true })),
-    }),
-    async execute(_id, params: Static<Tool["parameters"]>, signal) {
+    parameters: apexSearchParams,
+    async execute(_id, params: Static<typeof apexSearchParams>, signal) {
       const hits = await engine().search({
         query: String(params.query ?? ""),
         topK: Number(params.top_k ?? 6),
         dimensions: params.dimensions as never,
         expandGraph: params.expand_graph !== false,
       });
-      if (signal?.aborted) return { content: [{ type: "text", text: "aborted" }], details: {} };
+      if (signal?.aborted) return { content: [{ type: "text", text: "aborted" }], details: { count: 0 } };
       if (!hits.length) return { content: [{ type: "text", text: "(no memory hits)" }], details: { count: 0 } };
       const text = hits
         .map((h) => {
@@ -160,9 +161,9 @@ export function registerMemoryTools(api: ApexExtensionAPI): void {
     }),
     async execute(_id, params) {
       const dir = config().skills.dir;
-      if (!dir) return { content: [{ type: "text", text: "skills.dir is not configured (set SKILLS_DIR)" }], details: { error: "no_skills_dir" }, isError: true };
+      if (!dir) return { content: [{ type: "text", text: "skills.dir is not configured (set SKILLS_DIR)" }], details: { error: "no_skills_dir", path: undefined } as any, isError: true };
       const name = String(params.name ?? "").toLowerCase().replace(/[^a-z0-9_-]/g, "_");
-      if (!name) return { content: [{ type: "text", text: "name is required" }], details: { error: "no_name" }, isError: true };
+      if (!name) return { content: [{ type: "text", text: "name is required" }], details: { error: "no_name", path: undefined } as any, isError: true };
       const lines: string[] = [
         `# ${name}`,
         ``,
@@ -187,7 +188,7 @@ export function registerMemoryTools(api: ApexExtensionAPI): void {
       writeFileSync(path, lines.join("\n") + "\n", "utf8");
       // Notify the runtime so a re-load picks up the new skill.
       api.emit("skill_loaded", { name, path });
-      return { content: [{ type: "text", text: `distilled skill written to ${path}` }], details: { path } };
+      return { content: [{ type: "text", text: `distilled skill written to ${path}` }], details: { error: undefined, path } as any };
     },
   });
 

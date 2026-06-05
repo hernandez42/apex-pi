@@ -160,7 +160,7 @@ export class FeishuMom {
     const agent = getAgent();
     let full = "";
     try {
-      const sub = agent.subscribe((ev) => {
+      const sub = agent.subscribe((ev: import("@earendil-works/pi-agent-core").AgentEvent) => {
         if (ev.type === "message_update") {
           const mue = ev as { assistantMessageEvent?: { type: string; delta?: string } };
           if (mue.assistantMessageEvent?.type === "text_delta" && mue.assistantMessageEvent.delta) {

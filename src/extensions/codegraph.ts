@@ -70,14 +70,14 @@ export function registerCodegraphTools(api: ApexExtensionAPI): void {
     async execute(_id, params) {
       const r = getCg().impact(String(params.symbol_id));
       if (!r.symbol.name) {
-        return { content: [{ type: "text", text: "symbol not found" }], details: { error: "not_found" }, isError: true };
+        return { content: [{ type: "text", text: "symbol not found" }], details: { error: "not_found", blastRadius: undefined, files: undefined } as any, isError: true };
       }
       const text = `symbol: ${r.symbol.kind} ${r.symbol.name} (${r.symbol.file}:${r.symbol.line})
 blast radius: ${r.blastRadius}
 files affected: ${r.filesAffected.length}
 callers (${r.callers.length}): ${r.callers.slice(0, 10).map((s) => s.name).join(", ")}
 callees (${r.callees.length}): ${r.callees.slice(0, 10).map((s) => s.name).join(", ")}`;
-      return { content: [{ type: "text", text }], details: { blastRadius: r.blastRadius, files: r.filesAffected.length } };
+      return { content: [{ type: "text", text }], details: { error: undefined, blastRadius: r.blastRadius, files: r.filesAffected.length } as any };
     },
   });
 }
