@@ -115,10 +115,10 @@ async function oneShot(prompt: string): Promise<number> {
     }
   });
   try {
-    const result = await agent.prompt(prompt);
+    await agent.prompt(prompt);
     process.stdout.write("\n");
-    log.info("cli.oneshot.done", { stop: result.stopReason });
-    return result.stopReason === "end_turn" ? 0 : 2;
+    log.info("cli.oneshot.done");
+    return 0;
   } finally {
     sub();
   }
