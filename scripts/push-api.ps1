@@ -32,10 +32,12 @@ $ref = Invoke-RestMethod -Uri "$apiBase/repos/$Owner/$Repo/git/ref/heads/$Branch
 $parentSha = $ref.object.sha
 Write-Host "      parent = $parentSha"
 
-# 2) Upload every tracked file as a blob.
+# 2) Upload every tracked + untracked-but-not-ignored file as a blob.
 Write-Host "[2/5] Uploading blobs..." -ForegroundColor Cyan
-$files = & git ls-files
-Write-Host "      $($files.Count) files to upload"
+$tracked = & git ls-files
+$untracked = & git ls-files --others --exclude-standard
+$files = @($tracked) + @($untracked) | Sort-Object -Unique
+Write-Host "      $($files.Count) files to upload ($($tracked.Count) tracked, $($untracked.Count) untracked)"
 
 $blobEntries = New-Object System.Collections.Generic.List[object]
 $i = 0
