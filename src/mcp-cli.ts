@@ -17,12 +17,12 @@ async function main() {
   app.all("/mcp", (c) => handleMcp(c.req.raw));
   app.all("/mcp/*", (c) => handleMcp(c.req.raw));
   const server = Bun.serve({ port, hostname: "0.0.0.0", fetch: app.fetch });
-  log.info({ port, provider: config().llm.provider, model: config().llm.model }, "apex-mcp listening");
+  log.info("apex-mcp listening", { port, provider: config().llm.provider, model: config().llm.model });
 
   const stop = async (sig: NodeJS.Signals) => {
-    log.info({ sig }, "apex-mcp shutting down");
-    try { server.stop(); } catch (e) { log.warn({ err: String(e) }, "server.stop threw"); }
-    try { await shutdown(); } catch (e) { log.warn({ err: String(e) }, "shutdown threw"); }
+    log.info("apex-mcp shutting down", { sig });
+    try { server.stop(); } catch (e) { log.warn("server.stop threw", { err: String(e) }); }
+    try { await shutdown(); } catch (e) { log.warn("shutdown threw", { err: String(e) }); }
     process.exit(0);
   };
   process.on("SIGINT", stop);
@@ -31,6 +31,6 @@ async function main() {
 }
 
 main().catch((e) => {
-  log.error({ err: String(e), stack: (e as Error)?.stack }, "apex-mcp crashed");
+  log.error("apex-mcp crashed", { err: String(e), stack: (e as Error)?.stack });
   process.exit(1);
 });

@@ -185,11 +185,11 @@ Write a concise (max ~300 words) summary that:
 Be specific, use file paths. No filler.`;
   try {
     const cfg = config();
-    const model: Model<any> = getModel(cfg.llm.provider, cfg.llm.model);
+    const model: Model<any> = getModel(cfg.llm.provider as never, cfg.llm.model);
     const res = await complete(model, {
+      systemPrompt: "You are a precise, terse technical writer.",
       messages: [
-        { role: "system", content: "You are a precise, terse technical writer." },
-        { role: "user", content: prompt },
+        { role: "user", content: prompt, timestamp: Date.now() },
       ],
     });
     const block = res.content.find((p) => p.type === "text");

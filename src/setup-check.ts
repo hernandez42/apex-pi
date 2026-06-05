@@ -30,7 +30,7 @@ if (!process.env.LLM_API_KEY && !process.env.OPENAI_API_KEY && !process.env.ANTH
 } else {
   ok("API key present");
 }
-if (cfg.llm.provider === "openai-compatible" || cfg.llm.baseUrl) {
+if (cfg.llm.provider === "openai-compatible" || process.env.LLM_BASE_URL) {
   try {
     const t0 = Date.now();
     const base = (process.env.LLM_BASE_URL ?? "https://api.openai.com/v1").replace(/\/+$/, "");

@@ -280,7 +280,7 @@ export class MemoryStore {
 
     // 1. BM25 via FTS5
     const bm25Rows = this.db
-      .query<{ id: string; bm25: number; rowid: number }, [string, ...string[]]>(
+      .query<{ id: string; bm25: number; rowid: number }, [string, ...(string | number)[]]>(
         `SELECT m.id, bm25(memories_fts) AS bm25, m.rowid
          FROM memories_fts
          JOIN memories m ON m.rowid = memories_fts.rowid
@@ -370,7 +370,7 @@ export class MemoryStore {
 
     // RRF fusion: each source contributes 1/(k+rank)
     const k = 60;
-    const sources = ["bm25", "graph", "lex", "recency"] as const;
+    const sources = ["bm25", "graph", "lexical", "recency"] as const;
     const ranks = new Map<typeof sources[number], Map<string, number>>();
     for (const s of sources) ranks.set(s, new Map());
     for (const s of sources) {
@@ -457,7 +457,7 @@ export class MemoryStore {
     if (dangling > 0) issues.push(`${dangling} dangling graph edge(s)`);
     if (workingBloat) issues.push("working memory is bloated");
     const decayIssues = this.db
-      .query<{ c: number }, []>("SELECT COUNT(*) AS c FROM memories WHERE decay_until < ?")
+      .query<{ c: number }, [number]>("SELECT COUNT(*) AS c FROM memories WHERE decay_until < ?")
       .get(Date.now())?.c ?? 0;
     if (decayIssues > 0) issues.push(`${decayIssues} decayed memory record(s)`);
     const denom = Math.max(1, stats.total);
