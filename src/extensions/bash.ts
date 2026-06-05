@@ -78,11 +78,13 @@ export function registerBashTool(api: ApexExtensionAPI): void {
           env: process.env,
           signal: ac.signal,
         });
-        const [stdout, stderr, exitCode] = await Promise.all([
-          new Response(proc.stdout).text(),
-          new Response(proc.stderr).text(),
+        const [stdoutBytes, stderrBytes, exitCode] = await Promise.all([
+          proc.stdout ? new Response(proc.stdout as ReadableStream<Uint8Array>).arrayBuffer() : Promise.resolve(new ArrayBuffer(0)),
+          proc.stderr ? new Response(proc.stderr as ReadableStream<Uint8Array>).arrayBuffer() : Promise.resolve(new ArrayBuffer(0)),
           proc.exited,
         ]);
+        const stdout = new TextDecoder().decode(new Uint8Array(stdoutBytes));
+        const stderr = new TextDecoder().decode(new Uint8Array(stderrBytes));
         clearTimeout(timer);
         const out = (stdout || "").slice(0, cfg.toolResultMaxChars);
         const err = (stderr || "").slice(0, cfg.toolResultMaxChars);
