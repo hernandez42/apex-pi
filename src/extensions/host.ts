@@ -24,9 +24,10 @@ export interface ApexExtensionContext {
 
 export interface ApexExtensionAPI {
   /** Register a tool. The runtime wires the returned tool to Agent.
-   *  We accept any AgentTool shape (TSchema params, any details) so callers
-   *  can return heterogeneous details shapes from different branches. */
-  registerTool(tool: AgentTool<TSchema, any>): void;
+   *  S is inferred from the tool's `parameters` schema so the execute()
+   *  callback's `params` is typed as `Static<S>`. We use `any` for the
+   *  details shape so callers can return heterogeneous details per branch. */
+  registerTool<S extends TSchema>(tool: AgentTool<S, any>): void;
 
   /** Subscribe to a runtime event. Returns an unsubscribe fn. */
   on(event: string, handler: (payload: unknown) => unknown | Promise<unknown>): () => void;

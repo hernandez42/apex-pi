@@ -57,8 +57,8 @@ export function createApp(): Hono {
             send(ev.type, ev);
           });
           send("start", { ts: Date.now() });
-          const result = await agent.prompt(body.message);
-          send("done", { stop_reason: result.stopReason, final: result });
+          await agent.prompt(body.message);
+          send("done", { ts: Date.now() });
           sub();
         } catch (e) {
           send("error", { message: (e as Error).message });

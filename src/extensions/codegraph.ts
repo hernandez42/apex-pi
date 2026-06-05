@@ -1,7 +1,7 @@
 // src/extensions/codegraph.ts
 // Registers 4 codegraph_* tools with the agent host.
 
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { getCodegraph, type Codegraph } from "../codegraph/index.ts";
 import type { ApexExtensionAPI } from "./host.ts";
 
@@ -9,17 +9,26 @@ function getCg(): Codegraph {
   return getCodegraph();
 }
 
+const SearchParams = Type.Object({
+  query: Type.String(),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 12 })),
+});
+const SymbolIdParams = Type.Object({
+  symbol_id: Type.String(),
+});
+const CallersParams = Type.Object({
+  symbol_id: Type.String(),
+  depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 5, default: 1 })),
+});
+
 export function registerCodegraphTools(api: ApexExtensionAPI): void {
   api.registerTool({
     name: "codegraph_search",
     label: "Codegraph Search",
     description:
       "Fuzzy search for a symbol by name across the indexed codebase. Returns up to 20 hits with file/line/kind.",
-    parameters: Type.Object({
-      query: Type.String(),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 12 })),
-    }),
-    async execute(_id, params) {
+    parameters: SearchParams,
+    async execute(_id, params: Static<typeof SearchParams>) {
       const hits = getCg().searchSymbol(String(params.query ?? ""), Number(params.limit ?? 12));
       if (!hits.length) return { content: [{ type: "text", text: "(no symbols matched)" }], details: { count: 0 } };
       const text = hits
@@ -33,11 +42,8 @@ export function registerCodegraphTools(api: ApexExtensionAPI): void {
     name: "codegraph_callers",
     label: "Codegraph Callers",
     description: "Find all symbols that call the given symbol id (e.g. src/foo.ts::bar@42).",
-    parameters: Type.Object({
-      symbol_id: Type.String(),
-      depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 5, default: 1 })),
-    }),
-    async execute(_id, params) {
+    parameters: CallersParams,
+    async execute(_id, params: Static<typeof CallersParams>) {
       const syms = getCg().callers(String(params.symbol_id), Number(params.depth ?? 1));
       if (!syms.length) return { content: [{ type: "text", text: "(no callers)" }], details: { count: 0 } };
       const text = syms.map((s) => `${s.kind} ${s.name} — ${s.file}:${s.line}`).join("\n");
@@ -49,11 +55,8 @@ export function registerCodegraphTools(api: ApexExtensionAPI): void {
     name: "codegraph_callees",
     label: "Codegraph Callees",
     description: "Find all symbols called by the given symbol id.",
-    parameters: Type.Object({
-      symbol_id: Type.String(),
-      depth: Type.Optional(Type.Integer({ minimum: 1, maximum: 5, default: 1 })),
-    }),
-    async execute(_id, params) {
+    parameters: CallersParams,
+    async execute(_id, params: Static<typeof CallersParams>) {
       const syms = getCg().callees(String(params.symbol_id), Number(params.depth ?? 1));
       if (!syms.length) return { content: [{ type: "text", text: "(no callees)" }], details: { count: 0 } };
       const text = syms.map((s) => `${s.kind} ${s.name} — ${s.file}:${s.line}`).join("\n");
@@ -66,8 +69,8 @@ export function registerCodegraphTools(api: ApexExtensionAPI): void {
     label: "Codegraph Impact",
     description:
       "Compute the blast radius of changing a symbol: transitive callers + callees + files affected.",
-    parameters: Type.Object({ symbol_id: Type.String() }),
-    async execute(_id, params) {
+    parameters: SymbolIdParams,
+    async execute(_id, params: Static<typeof SymbolIdParams>) {
       const r = getCg().impact(String(params.symbol_id));
       if (!r.symbol.name) {
         return { content: [{ type: "text", text: "symbol not found" }], details: { error: "not_found", blastRadius: undefined, files: undefined } as any, isError: true };

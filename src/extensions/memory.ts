@@ -1,7 +1,8 @@
 // src/extensions/memory.ts
-// Registers 6 apex_* tools with the agent host:
+// Registers 7 apex_* tools with the agent host:
 //   apex_search, apex_ingest, apex_relate, apex_stats,
-//   apex_feedback (natural-language learning), apex_distill (skill synthesis)
+//   apex_feedback (natural-language learning), apex_distill (skill synthesis),
+//   apex_list_skills
 //
 // The extension factory accepts a real pi-coding-agent ExtensionAPI OR our
 // ApexExtensionAPI shim, so it loads in both contexts without changes.
@@ -17,23 +18,57 @@ import type { ApexExtensionAPI } from "./host.ts";
 
 const DIM = StringEnum(["working", "episodic", "semantic", "procedural", "declarative"] as const);
 
+// Hoist all schemas so we can use Static<typeof X> to type the params arg.
+const SearchParams = Type.Object({
+  query: Type.String({ description: "Free-form natural-language query." }),
+  top_k: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 6 })),
+  dimensions: Type.Optional(Type.Array(DIM)),
+  expand_graph: Type.Optional(Type.Boolean({ default: true })),
+});
+const IngestParams = Type.Object({
+  content: Type.String(),
+  dimension: DIM,
+  tags: Type.Optional(Type.Array(Type.String())),
+  importance: Type.Optional(Type.Number({ minimum: 0, maximum: 1, default: 0.5 })),
+  meta: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+});
+const RelateParams = Type.Object({
+  src: Type.String(),
+  rel: Type.String(),
+  dst: Type.String(),
+  weight: Type.Optional(Type.Number({ default: 1.0 })),
+  dimension: Type.Optional(DIM),
+});
+const StatsParams = Type.Object({});
+const FeedbackParams = Type.Object({
+  verdict: StringEnum(["up", "down", "note"] as const),
+  comment: Type.Optional(Type.String()),
+  dimension: Type.Optional(DIM),
+});
+const DistillParams = Type.Object({
+  name: Type.String({ description: "Lower-case skill id, e.g. 'release-checklist'." }),
+  steps: Type.Array(
+    Type.Object({
+      tool: Type.String(),
+      input: Type.Optional(Type.Unknown()),
+      output: Type.String(),
+    }),
+    { minItems: 1 },
+  ),
+});
+const ListSkillsParams = Type.Object({});
+
 export function registerMemoryTools(api: ApexExtensionAPI): void {
   const engine = (): MemoryEngine => getMemoryEngine(getStore()!);
 
   // ───── apex_search ────────────────────────────────────────────────────
-  const apexSearchParams = Type.Object({
-    query: Type.String({ description: "Free-form natural-language query." }),
-    top_k: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 6 })),
-    dimensions: Type.Optional(Type.Array(DIM)),
-    expand_graph: Type.Optional(Type.Boolean({ default: true })),
-  });
   api.registerTool({
     name: "apex_search",
     label: "Apex Memory Search",
     description:
       "Hybrid search over the 5D memory store. Returns hits with sources (bm25/graph/lexical/recency) and a 0..1 fused score.",
-    parameters: apexSearchParams,
-    async execute(_id, params: Static<typeof apexSearchParams>, signal) {
+    parameters: SearchParams,
+    async execute(_id, params: Static<typeof SearchParams>, signal) {
       const hits = await engine().search({
         query: String(params.query ?? ""),
         topK: Number(params.top_k ?? 6),
@@ -58,14 +93,8 @@ export function registerMemoryTools(api: ApexExtensionAPI): void {
     label: "Apex Memory Ingest",
     description:
       "Ingest a memory record into the 5D store. Use 'working' for active context, 'episodic' for events, 'semantic' for concepts, 'procedural' for skills, 'declarative' for stable facts.",
-    parameters: Type.Object({
-      content: Type.String(),
-      dimension: DIM,
-      tags: Type.Optional(Type.Array(Type.String())),
-      importance: Type.Optional(Type.Number({ minimum: 0, maximum: 1, default: 0.5 })),
-      meta: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
-    }),
-    async execute(_id, params) {
+    parameters: IngestParams,
+    async execute(_id, params: Static<typeof IngestParams>) {
       const rec = await engine().ingest({
         content: String(params.content ?? ""),
         dimension: params.dimension as never,
@@ -82,14 +111,8 @@ export function registerMemoryTools(api: ApexExtensionAPI): void {
     name: "apex_relate",
     label: "Apex Memory Relate",
     description: "Add a typed edge between two entity labels in the knowledge graph.",
-    parameters: Type.Object({
-      src: Type.String(),
-      rel: Type.String(),
-      dst: Type.String(),
-      weight: Type.Optional(Type.Number({ default: 1.0 })),
-      dimension: Type.Optional(DIM),
-    }),
-    async execute(_id, params) {
+    parameters: RelateParams,
+    async execute(_id, params: Static<typeof RelateParams>) {
       await engine().relate(
         String(params.src),
         String(params.rel),
@@ -107,7 +130,7 @@ export function registerMemoryTools(api: ApexExtensionAPI): void {
     label: "Apex Memory Stats",
     description:
       "Memory store statistics: total records, per-dimension counts, graph size, last dream time, plus engine mode (local / remote).",
-    parameters: Type.Object({}),
+    parameters: StatsParams,
     async execute() {
       const s = await engine().stats();
       return { content: [{ type: "text", text: JSON.stringify({ engine: engine().mode(), ...s }, null, 2) }], details: s };
@@ -123,12 +146,8 @@ export function registerMemoryTools(api: ApexExtensionAPI): void {
     label: "Apex Feedback (Learn)",
     description:
       "Record natural-language user feedback for the current turn. Use 'up' when the user explicitly approves, 'down' when they correct you, and 'note' for free-form additions. This feeds the learning loop.",
-    parameters: Type.Object({
-      verdict: StringEnum(["up", "down", "note"] as const),
-      comment: Type.Optional(Type.String()),
-      dimension: Type.Optional(DIM),
-    }),
-    async execute(_id, params) {
+    parameters: FeedbackParams,
+    async execute(_id, params: Static<typeof FeedbackParams>) {
       const verdict = params.verdict;
       const comment = String(params.comment ?? "").trim();
       const dim = (params.dimension as never) ?? (verdict === "down" ? "procedural" : "semantic");
@@ -148,18 +167,8 @@ export function registerMemoryTools(api: ApexExtensionAPI): void {
     label: "Apex Distill (Skill Synthesis)",
     description:
       "Distil a successful tool-call sequence from the current session into a SKILL.md candidate and write it to the skills directory. Pass the list of (name, input, output_summary) triples.",
-    parameters: Type.Object({
-      name: Type.String({ description: "Lower-case skill id, e.g. 'release-checklist'." }),
-      steps: Type.Array(
-        Type.Object({
-          tool: Type.String(),
-          input: Type.Optional(Type.Unknown()),
-          output: Type.String(),
-        }),
-        { minItems: 1 },
-      ),
-    }),
-    async execute(_id, params) {
+    parameters: DistillParams,
+    async execute(_id, params: Static<typeof DistillParams>) {
       const dir = config().skills.dir;
       if (!dir) return { content: [{ type: "text", text: "skills.dir is not configured (set SKILLS_DIR)" }], details: { error: "no_skills_dir", path: undefined } as any, isError: true };
       const name = String(params.name ?? "").toLowerCase().replace(/[^a-z0-9_-]/g, "_");
@@ -176,7 +185,7 @@ export function registerMemoryTools(api: ApexExtensionAPI): void {
         `## Steps`,
         ``,
       ];
-      for (const s of params.steps as Array<{ tool: string; input?: unknown; output?: string }>) {
+      for (const s of (params.steps ?? []) as Array<{ tool: string; input?: unknown; output?: string }>) {
         const input = s.input ? ` (input: ${JSON.stringify(s.input)})` : "";
         const out = (s.output ?? "").slice(0, 280);
         lines.push(`1. **${s.tool}**${input}`);
@@ -197,7 +206,7 @@ export function registerMemoryTools(api: ApexExtensionAPI): void {
     name: "apex_list_skills",
     label: "Apex List Skills",
     description: "List all skills visible to the agent (built-in + SKILLS_DIR).",
-    parameters: Type.Object({}),
+    parameters: ListSkillsParams,
     async execute() {
       const { SKILLS } = await import("../skills/index.ts");
       const names = Object.keys(SKILLS);
@@ -207,6 +216,4 @@ export function registerMemoryTools(api: ApexExtensionAPI): void {
       };
     },
   });
-
-  // (end of registerMemoryTools)
 }

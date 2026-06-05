@@ -2,11 +2,18 @@
 // Registers the understand_path tool — 5-phase codebase graph that runs
 // scanner → analyzer → tours → hotspots → LLM explainer.
 
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { isAbsolute, resolve } from "node:path";
 import { understand } from "../understand/index.ts";
 import { config } from "../config.ts";
 import type { ApexExtensionAPI } from "./host.ts";
+
+const UnderstandParams = Type.Object({
+  path: Type.String({ description: "Absolute path to a directory." }),
+  max_files: Type.Optional(Type.Integer({ minimum: 1, maximum: 50_000 })),
+  focus: Type.Optional(Type.String({ description: "Optional focus question for the explainer." })),
+  graph_only: Type.Optional(Type.Boolean({ default: false })),
+});
 
 export function registerUnderstandTool(api: ApexExtensionAPI): void {
   void api; // currently no host events to subscribe to
@@ -15,13 +22,8 @@ export function registerUnderstandTool(api: ApexExtensionAPI): void {
     label: "Understand Path",
     description:
       "Build a knowledge graph of a directory and return an LLM-written architectural summary + guided tours + hotspots. Pass graph_only=true to skip the LLM call and get a pure deterministic graph.",
-    parameters: Type.Object({
-      path: Type.String({ description: "Absolute path to a directory." }),
-      max_files: Type.Optional(Type.Integer({ minimum: 1, maximum: 50_000 })),
-      focus: Type.Optional(Type.String({ description: "Optional focus question for the explainer." })),
-      graph_only: Type.Optional(Type.Boolean({ default: false })),
-    }),
-    async execute(_id, params) {
+    parameters: UnderstandParams,
+    async execute(_id, params: Static<typeof UnderstandParams>) {
       const p = String(params.path ?? "");
       if (!p) return { content: [{ type: "text", text: "path is required" }], details: { error: "no_path", scanned: undefined, symbols: undefined } as any, isError: true };
       const root = isAbsolute(p) ? p : resolve(process.cwd(), p);

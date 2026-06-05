@@ -345,7 +345,7 @@ export class MemoryStore {
     }
 
     // Merge results
-    type Scored = { id: string; bm25: number; graph: number; lex: number; recency: number };
+    type Scored = { id: string; bm25: number; graph: number; lexical: number; recency: number };
     const merged = new Map<string, Scored>();
 
     for (const r of bm25Rows) {
