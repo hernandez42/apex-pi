@@ -39,17 +39,19 @@ jobs:
         run: |
           set -e
           ./dist/apex-pi --help
-          MCP_PORT=18080 ./dist/apex-mcp &
+          MCP_DATA=$(mktemp -d) APEX_PI_DATA=$MCP_DATA MCP_PORT=18080 ./dist/apex-mcp &
           MCP_PID=$!
           sleep 2
           curl -fsS http://127.0.0.1:18080/healthz
           kill $MCP_PID 2>/dev/null || true
-          APEX_PI_DATA=$(mktemp -d) LLM_PROVIDER=openai LLM_MODEL=gpt-4o-mini LLM_API_KEY=test-key PORT=18081 ./dist/apex-pi &
+          rm -rf $MCP_DATA
+          HTTP_DATA=$(mktemp -d) LLM_PROVIDER=openai LLM_MODEL=gpt-4o-mini LLM_API_KEY=test-key PORT=18081 ./dist/apex-pi &
           HTTP_PID=$!
           sleep 2
           curl -fsS http://127.0.0.1:18081/healthz
           curl -fsS http://127.0.0.1:18081/readyz
           kill $HTTP_PID 2>/dev/null || true
+          rm -rf $HTTP_DATA
 
       - name: Docker build
         run: docker build -t apex-pi:ci .
