@@ -209,6 +209,19 @@ export function addGene(gene: GeneRecord): boolean {
     }
   }
   _genes.set(gene.gene_id, gene);
+  // 持久化到 SQLite
+  try {
+    const db = getGeneDb() as unknown as {
+      run: (sql: string, p?: Record<string, unknown>) => void
+    };
+    db.run(
+      "INSERT OR REPLACE INTO genes (gene_id, content, delta_g, fitness, generation, parent_gene_ids, created_at, last_expressed_at, expression_count, state, tags, connections_in, connections_out) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      gene.gene_id, gene.content, gene.delta_g, gene.fitness, gene.generation,
+      JSON.stringify(gene.parent_gene_ids), gene.created_at, gene.last_expressed_at,
+      gene.expression_count, gene.state, JSON.stringify(gene.tags),
+      gene.connections_in, gene.connections_out
+    );
+  } catch { /* ignore */ }
   log.debug("gene_network.add", { gene_id: gene.gene_id, delta_g: gene.delta_g });
   return true;
 }
@@ -256,7 +269,18 @@ export function expressGene(geneId: string): GeneRecord | null {
   };
   _genes.set(geneId, updated);
 
-  // 修复: 有界数组，超限清理最老的
+  // 持久化到 SQLite
+  try {
+    const db = getGeneDb() as unknown as {
+      run: (sql: string, p?: Record<string, unknown>) => void
+    };
+    db.run(
+      "UPDATE genes SET last_expressed_at=?, expression_count=?, fitness=?, state=? WHERE gene_id=?",
+      now, updated.expression_count, updated.fitness, updated.state, geneId
+    );
+  } catch { /* ignore */ }
+
+  // 有界数组，超限清理最老的
   _expressedRecently.push(geneId);
   while (_expressedRecently.length > MAX_EXPRESSED) {
     _expressedRecently.shift();
@@ -268,17 +292,47 @@ export function expressGene(geneId: string): GeneRecord | null {
 /**
  * 选择最佳基因用于上下文注入
  */
-export function selectBestGenes(query: string, topK = 5): GeneRecord[] {
-  const candidates = Array.from(_genes.values()).filter(g =>
-    g.state === "active" || g.state === "candidate"
-  );
-  if (candidates.length === 0) return [];
-  const scored = candidates.map(g => ({
-    gene: g,
-    score: expressionWeight(g) * (g.delta_g / 100),
-  }));
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, topK).map(s => s.gene);
+/**
+ * 选择最优基因（直接从SQLite查询，不依赖内存Map）
+ * @param topK 返回数量上限
+ * @param minDeltaG 最小delta_g阈值
+ */
+export function selectBestGenes(topK = 5, minDeltaG = 0): GeneRecord[] {
+  try {
+    const db = getGeneDb() as unknown as {
+      query: (sql: string, params?: Record<string, unknown>) => { all: () => Record<string, unknown>[] }
+    };
+    const rows = db.query(
+      "SELECT * FROM genes WHERE state IN ('active','candidate') AND delta_g >= ? ORDER BY delta_g DESC LIMIT ?"
+    ).all(minDeltaG, topK) as Record<string, unknown>[];
+    return rows.map(row => ({
+      gene_id: String(row.gene_id),
+      content: String(row.content),
+      delta_g: Number(row.delta_g),
+      fitness: Number(row.fitness),
+      generation: Number(row.generation),
+      parent_gene_ids: JSON.parse(String(row.parent_gene_ids || "[]")),
+      created_at: String(row.created_at),
+      last_expressed_at: String(row.last_expressed_at),
+      expression_count: Number(row.expression_count),
+      state: String(row.state) as GeneRecordState,
+      tags: JSON.parse(String(row.tags || "[]")),
+      connections_in: Number(row.connections_in),
+      connections_out: Number(row.connections_out),
+    }));
+  } catch {
+    // Fallback to memory Map
+    const candidates = Array.from(_genes.values()).filter(g =>
+      g.state === "active" || g.state === "candidate"
+    );
+    if (candidates.length === 0) return [];
+    const scored = candidates.map(g => ({
+      gene: g,
+      score: expressionWeight(g) * (g.delta_g / 100),
+    }));
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, topK).map(s => s.gene);
+  }
 }
 
 /**
@@ -380,8 +434,8 @@ export async function loadFromMemory(): Promise<void> {
     const db = getGeneDb() as unknown as {
       query: (sql: string) => { all: () => Record<string, unknown>[] };
     };
-    const rows = db.query("SELECT * FROM genes ORDER BY delta_g DESC LIMIT $1")
-      .all({ $1: _config.max_genes }) as Record<string, unknown>[];
+    const rows = db.query("SELECT * FROM genes ORDER BY delta_g DESC LIMIT ?")
+      .all(_config.max_genes) as Record<string, unknown>[];
     let loaded = 0;
     for (const row of rows) {
       try {
@@ -463,29 +517,62 @@ export function getGeneNetworkStats(): {
   avg_generation: number;
   expression_total: number;
 } {
-  const by_state: Record<GeneRecordState, number> = {
-    candidate: 0, active: 0, stale: 0, archived: 0, expressed: 0,
-  };
-  let topDeltaG = 0;
-  let fitnessSum = 0;
-  let genSum = 0;
-  let exprTotal = 0;
-  let count = 0;
-
-  for (const gene of _genes.values()) {
-    by_state[gene.state]++;
-    if (gene.delta_g > topDeltaG) topDeltaG = gene.delta_g;
-    fitnessSum += gene.fitness;
-    genSum += gene.generation;
-    exprTotal += gene.expression_count;
-    count++;
+  // Direct SQLite query — no dependency on in-memory _genes Map
+  try {
+    const db = getGeneDb() as unknown as {
+      query: (sql: string) => { all: () => Record<string, unknown>[] }
+    };
+    const rows = db.query("SELECT * FROM genes").all() as Record<string, unknown>[];
+    const by_state: Record<GeneRecordState, number> = {
+      candidate: 0, active: 0, stale: 0, archived: 0, expressed: 0,
+    };
+    let topDeltaG = 0;
+    let fitnessSum = 0;
+    let genSum = 0;
+    let exprTotal = 0;
+    for (const row of rows) {
+      const state = String(row.state) as GeneRecordState;
+      by_state[state] = (by_state[state] || 0) + 1;
+      const deltaG = Number(row.delta_g);
+      if (deltaG > topDeltaG) topDeltaG = deltaG;
+      fitnessSum += Number(row.fitness);
+      genSum += Number(row.generation);
+      exprTotal += Number(row.expression_count);
+    }
+    const count = rows.length;
+    return {
+      total: count,
+      by_state,
+      top_delta_g: topDeltaG,
+      avg_fitness: count > 0 ? fitnessSum / count : 0,
+      avg_generation: count > 0 ? genSum / count : 0,
+      expression_total: exprTotal,
+    };
+  } catch {
+    // Fallback to in-memory Map
+    const by_state: Record<GeneRecordState, number> = {
+      candidate: 0, active: 0, stale: 0, archived: 0, expressed: 0,
+    };
+    let topDeltaG = 0;
+    let fitnessSum = 0;
+    let genSum = 0;
+    let exprTotal = 0;
+    let count = 0;
+    for (const gene of _genes.values()) {
+      by_state[gene.state]++;
+      if (gene.delta_g > topDeltaG) topDeltaG = gene.delta_g;
+      fitnessSum += gene.fitness;
+      genSum += gene.generation;
+      exprTotal += gene.expression_count;
+      count++;
+    }
+    return {
+      total: count,
+      by_state,
+      top_delta_g: topDeltaG,
+      avg_fitness: count > 0 ? fitnessSum / count : 0,
+      avg_generation: count > 0 ? genSum / count : 0,
+      expression_total: exprTotal,
+    };
   }
-  return {
-    total: count,
-    by_state,
-    top_delta_g: topDeltaG,
-    avg_fitness: count > 0 ? fitnessSum / count : 0,
-    avg_generation: count > 0 ? genSum / count : 0,
-    expression_total: exprTotal,
-  };
 }
