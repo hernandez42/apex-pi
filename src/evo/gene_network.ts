@@ -401,9 +401,7 @@ function getGeneDb(): ReturnType<typeof Database> {
   const dbPath = boot().config?.dataDir
     ? boot().config.dataDir + "/gene_network.sqlite"
     : "/root/apex-pi/data/gene_network.sqlite";
-  _geneDb = (globalThis as Record<string, unknown>).Bun
-    ? (globalThis as Record<string, unknown>).Bun.sqlite(dbPath) as import("bun").sqliteDB
-    : {} as import("bun").sqliteDB;
+  _geneDb = new Database(dbPath);
   // Init schema
   try {
     _geneDb.run(`

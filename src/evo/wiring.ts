@@ -20,6 +20,11 @@ import { scanForFailures, runEvolutionPipeline, loadStore } from "./pipeline.ts"
 import { log } from "../log.ts";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
 
+// Symbol: 保存原始 Dreamer.prototype.run（防止 wrapper 重入）
+const _ORIGINAL_DREAMER_RUN = Symbol.for("mossagi.dreamer.originalRun");
+// 防重入标记
+let _dreamerReentrant = false;
+
 export interface EvoWiringConfig {
   curatorIntervalTicks: number;
   autoApproveDeltaG: number;
@@ -81,8 +86,13 @@ export function updateEvoWiringConfig(cfg: Partial<EvoWiringConfig>): void {
 // ─── Dreamer wrapper (FIXED: single origRun call) ────────────────────────────
 
 async function dreamerTickWrapper(this: object): Promise<void> {
+  // P0 FIX: reentrancy guard
+  if (_dreamerReentrant) return;
+  _dreamerReentrant = true;
+  try {
   const { Dreamer } = await import("../memory/dreamer.ts");
-  const origRun = Dreamer.prototype.run as (this: object) => Promise<void>;
+  // P0 FIX: 使用 Symbol 访问原始函数（防止读取已patch的 prototype.run）
+  const origRun = Dreamer.prototype[_ORIGINAL_DREAMER_RUN] as (this: object) => Promise<void>;
   _dreamerTick++;
   const tick = _dreamerTick;
 
@@ -111,6 +121,7 @@ async function dreamerTickWrapper(this: object): Promise<void> {
       if (stats.new_genes > 0) log.info("evo.wiring.gene_network_evolved", stats);
     } catch (e) { log.error("evo.wiring.gene_network_err", { err: String(e) }); }
   }
+  } finally { _dreamerReentrant = false; }
 }
 
 // ─── Agent turn_end ────────────────────────────────────────────────────────
@@ -199,6 +210,9 @@ async function _doWire(
 async function wireDreamerToCurator(): Promise<void> {
   const { Dreamer } = await import("../memory/dreamer.ts");
   const origRun = Dreamer.prototype.run as (this: object) => Promise<void>;
+
+  // P0 FIX: 保存原始函数到 Symbol（防止 wrapper 重入）
+  (Dreamer.prototype as any)[_ORIGINAL_DREAMER_RUN] = origRun;
 
   Dreamer.prototype.run = async function (this: object) {
     await dreamerTickWrapper.call(this);

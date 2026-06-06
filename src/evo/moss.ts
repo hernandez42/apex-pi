@@ -6,6 +6,8 @@
  * 同时导出 calculateDeltaG 和 writeGene（background-review.ts 需要）
  */
 
+import type { GeneRecord } from "./gene_network.ts";
+
 const SPARKS_ENABLED = false; // 暂时禁用，防止内存问题
 
 export async function sparkRippleTick(): Promise<void> {
@@ -46,7 +48,7 @@ export async function writeGene(params: {
 }): Promise<{ gene_id: string }> {
   // P1 FIX: 真实实现，写入基因网络
   try {
-    const { addGene, persistToMemory, GeneRecord } = await import("./gene_network.ts");
+    const { addGene, persistToMemory } = await import("./gene_network.ts");
     const geneContent = params.content
       ?? `[moss gene] toolIterations=${params.toolIterations ?? 0}, delta_g=${params.delta_g}`;
     const gene: GeneRecord = {

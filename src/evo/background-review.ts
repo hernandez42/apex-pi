@@ -20,6 +20,10 @@ import { calculateDeltaG, writeGene } from "./moss.ts";
 import { addGene, persistToMemory, getGeneNetworkStats } from "./gene_network.ts";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
 
+// P0 FIX: Fork Storm Guard — max 1 concurrent background review
+let _backgroundReviewActive = false;
+const BACKGROUND_REVIEW_TIMEOUT_MS = 60_000;
+
 // ─── Review Prompts (from hermes-agent background_review.py) ───────────────────
 
 const MEMORY_REVIEW_PROMPT = `Review the conversation above and consider saving to memory if appropriate.
@@ -174,15 +178,23 @@ Tools used: ${(turn.snapshot?.toolCalls ?? []).map(tc => tc.name).join(", ") || 
     }
   }
 
-  if ((shouldReviewMemory || shouldReviewSkills) && !turn.interrupted && turn.finalText) {
-    // Fire and forget — don't block the main loop
+  if (_backgroundReviewActive) {
+    log.debug("evo.background_review.skip_reentrancy");
+  } else if ((shouldReviewMemory || shouldReviewSkills) && !turn.interrupted && turn.finalText) {
+    _backgroundReviewActive = true;
+    const ac = new AbortController();
+    const timeout = setTimeout(() => ac.abort(), BACKGROUND_REVIEW_TIMEOUT_MS);
     spawnBackgroundReviewFork({
       memory_review: shouldReviewMemory,
       skill_review: shouldReviewSkills,
       conversationSnapshot: turn.snapshot,
       finalText: turn.finalText,
+      signal: ac.signal,
     }).catch((e) => {
       log.error("evo.background_review.fork_failed", { err: String(e) });
+    }).finally(() => {
+      clearTimeout(timeout);
+      _backgroundReviewActive = false;
     });
   }
 }
@@ -218,6 +230,7 @@ export async function spawnBackgroundReviewFork(ctx: {
   skill_review: boolean;
   conversationSnapshot: AgentTurnSnapshot;
   finalText: string;
+  signal?: AbortSignal;
 }): Promise<void> {
   log.info("evo.background_review.spawn", {
     memory: ctx.memory_review,
@@ -245,7 +258,7 @@ export async function spawnBackgroundReviewFork(ctx: {
   });
 
   try {
-    await forkAgent.prompt(reviewUserMsg);
+    await forkAgent.prompt(reviewUserMsg, { signal: ctx.signal });
     log.info("evo.background_review.done", {
       memory: ctx.memory_review,
       skill: ctx.skill_review,
