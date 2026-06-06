@@ -1,31 +1,95 @@
-/**
- * ECC Instincts — 8条本能规则
- * 来自 pi-evo 的核心安全机制
- */
+export type InstinctAction =
+  | "shed_load"
+  | "halt_revert"
+  | "adaptive_throttle"
+  | "emergency_reboot";
 
-export interface Instinct {
+export interface InstinctRule {
   id: string;
-  pattern: string;
-  response: string;
+  trigger: string;
   priority: number;
+  action: InstinctAction;
 }
 
-export const eccInstincts: Instinct[] = [
-  { id: "instinct_01", pattern: "system_critical", response: "halt_and_audit", priority: 10 },
-  { id: "instinct_02", pattern: "memory_exhaustion", response: "gc_forced", priority: 9 },
-  { id: "instinct_03", pattern: "recursive_loop", response: "inject_counter", priority: 8 },
-  { id: "instinct_04", pattern: "contradiction_detected", response: "log_and_continue", priority: 5 },
-  { id: "instinct_05", pattern: "unknown_tool", response: "graceful_degrade", priority: 6 },
-  { id: "instinct_06", pattern: "delta_g_negative", response: "revert_last_action", priority: 7 },
-  { id: "instinct_07", pattern: "self_modify_attempt", response: "require_approval", priority: 9 },
-  { id: "instinct_08", pattern: "resource_starvation", response: "shed_load", priority: 8 },
+export interface InstinctMatch extends InstinctRule {
+  matched: boolean;
+}
+
+export const INSTINCT_RULES: InstinctRule[] = [
+  {
+    id: "instinct_01",
+    trigger: "memory_exhaustion",
+    priority: 10,
+    action: "shed_load",
+  },
+  {
+    id: "instinct_02",
+    trigger: "recursive_loop",
+    priority: 9,
+    action: "halt_revert",
+  },
+  {
+    id: "instinct_03",
+    trigger: "circuit_breaker_tripped",
+    priority: 10,
+    action: "shed_load",
+  },
+  {
+    id: "instinct_04",
+    trigger: "confidence_collapse",
+    priority: 5,
+    action: "adaptive_throttle",
+  },
+  {
+    id: "instinct_05",
+    trigger: "capability_degradation",
+    priority: 5,
+    action: "adaptive_throttle",
+  },
+  {
+    id: "instinct_06",
+    trigger: "system_critical_failure",
+    priority: 7,
+    action: "emergency_reboot",
+  },
+  {
+    id: "instinct_07",
+    trigger: "divergence_detected",
+    priority: 6,
+    action: "halt_revert",
+  },
+  {
+    id: "instinct_08",
+    trigger: "contradiction_detected",
+    priority: 4,
+    action: "adaptive_throttle",
+  },
 ];
 
-export function matchInstinct(input: string): Instinct | null {
-  for (const instinct of eccInstincts) {
-    if (input.toLowerCase().includes(instinct.pattern.toLowerCase())) {
-      return instinct;
-    }
-  }
-  return null;
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function hasWordBoundaryMatch(input: string, trigger: string): boolean {
+  const pattern = new RegExp(`\\b${escapeRegExp(trigger)}\\b`, "i");
+  return pattern.test(input);
+}
+
+export function matchInstincts(input: string): InstinctRule[] {
+  return INSTINCT_RULES.filter((rule) =>
+    hasWordBoundaryMatch(input, rule.trigger),
+  ).sort((a, b) => b.priority - a.priority);
+}
+
+export function resolveInstinct(input: string): InstinctRule | null {
+  return matchInstincts(input)[0] ?? null;
+}
+
+export function getInstinctAction(input: string): InstinctAction | null {
+  return resolveInstinct(input)?.action ?? null;
+}
+// Backward compat: eccInstincts() returns all rules (original interface)
+// New code should use resolveInstinct() / matchInstincts() for priority-aware matching
+export function eccInstincts(): Array<{ id: string; pattern: string; priority: number; action: string }> {
+  return INSTINCT_RULES.map((r) => ({ id: r.id, pattern: r.trigger, priority: r.priority, action: r.action }));
 }
