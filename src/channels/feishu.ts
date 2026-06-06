@@ -187,7 +187,7 @@ export class FeishuMom {
     for (const Ctor of [DirectCtor, DefaultCtor]) {
       if (typeof Ctor !== "function") continue;
       try {
-        return new Ctor();
+        return new Ctor({});
       } catch (e) {
         log.warn("feishu.dispatcher.ctor.threw", { err: (e as Error).message });
       }
