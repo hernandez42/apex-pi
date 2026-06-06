@@ -95,8 +95,13 @@ export function getAgent(opts: AgentOptions = {}): Agent {
   const h = getHost();
   const model = opts.model ?? resolveModel();
 
+  // P0 FIX: Include gene context in systemPrompt (was computed but never injected!)
+  const geneCtx = _cachedGeneContext || "";
+  const geneStats = _cachedGeneStats || "";
   const systemPrompt = [
     INSTINCTS.join("\n\n"),
+    geneCtx,
+    geneStats,
     opts.system ?? BASE_PROMPT,
     (opts.skills ?? []).join("\n\n"),
   ].filter(Boolean).join("\n\n");
@@ -136,9 +141,12 @@ export function getAgent(opts: AgentOptions = {}): Agent {
     }
   });
 
+  // P0 FIX: warm gene cache BEFORE agent creation (sync, not async fire-and-forget)
   _refreshGeneContext(opts.geneQuery ?? "").catch(e => {
     log.warn("agent.gene_cache_warm_failed", { err: String(e) });
   });
+  // Also trigger periodic refresh (background, non-blocking)
+  setInterval(() => _refreshGeneContext("").catch(() => {}), GENE_REFRESH_MS);
 
   log.info("agent.init", {
     model: `${cfg.llm.provider}/${cfg.llm.model}`,
