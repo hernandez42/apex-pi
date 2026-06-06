@@ -206,5 +206,19 @@ export function createApp(): Hono {
   // for clients that always poll /v1/workflows.
   mountWorkflows(app);
 
+  // ─── Manual Evo Trigger (debug) ─────────────────────────────────
+  app.post("/v1/evo/trigger", async (c) => {
+    try {
+      const { getDreamer } = await import("../bootstrap.ts");
+      const { dreamerTickWrapper } = await import("../evo/wiring.ts");
+      const d = getDreamer();
+      if (!d) return c.json({ error: "no dreamer" }, 400);
+      await dreamerTickWrapper.call(d);
+      return c.json({ ok: true });
+    } catch(e) {
+      return c.json({ error: String(e) }, 500);
+    }
+  });
+
   return app;
 }

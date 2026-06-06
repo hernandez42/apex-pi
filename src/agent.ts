@@ -1,16 +1,14 @@
 // src/agent.ts
 //
 // The apex-pi Agent singleton. Wraps @earendil-works/pi-agent-core's
-// `Agent` class with our system prompt (INSTINCTS + base), default model
+// `Agent` class with our system prompt (INSTINCTS + base + genes), default model
 // (from env), and a freshly-bootstrapped extension host.
 //
-// Use:
-//   import { getAgent } from "./agent.ts";
-//   const agent = getAgent();
-//   await agent.prompt("explain this project");
-//
-// The Agent emits a rich event stream — see `streamAgent()` for an async
-// iterator wrapper.
+// P0 Enhancement: Gene维 + ApexSpiral 注入
+//   - systemPrompt now includes: INSTINCTS + GENE_CONTEXT + APEX_SELF + BASE_PROMPT
+//   - Gene context from gene_network.ts (selectBestGenes)
+//   - Self description from apex_spiral.ts (getSelfDescription)
+//   - Both refreshed every 60 seconds (cache)
 
 import { Agent, type AgentEvent, type AgentTool } from "@earendil-works/pi-agent-core";
 import { type Model } from "@earendil-works/pi-ai";
@@ -20,6 +18,45 @@ import { installApexExtensions, INSTINCTS, BASE_PROMPT, createExtensionHost } fr
 import { getMemoryEngine } from "./memory/index.ts";
 import { log } from "./log.ts";
 import { resolveModel } from "./llm.ts";
+import { selectBestGenes, expressGene, getGeneNetworkStats } from "./evo/gene_network.ts";
+import { getSelfDescription, apexSpiralTick, recordDeltaG } from "./evo/apex_spiral.ts";
+
+// ─── Gene Context Cache ──────────────────────────────────────────────────────
+
+let _cachedGeneContext = "";
+let _cachedGeneStats = "";
+let _lastGeneRefresh = 0;
+const GENE_REFRESH_MS = 60 * 1000;
+
+async function _refreshGeneContext(query = ""): Promise<string> {
+  const now = Date.now();
+  if (now - _lastGeneRefresh < GENE_REFRESH_MS && _cachedGeneContext) {
+    return _cachedGeneContext;
+  }
+  try {
+    const genes = selectBestGenes(query, 5);
+    if (genes.length === 0) {
+      _cachedGeneContext = "";
+      _cachedGeneStats = "";
+    } else {
+      genes.forEach(g => expressGene(g.gene_id));
+      const geneLines = genes.map((g, i) =>
+        `[Gene ${i + 1}] delta_g=${g.delta_g} fitness=${g.fitness.toFixed(2)}\n` +
+        g.content.slice(0, 300)
+      ).join("\n\n");
+      const stats = getGeneNetworkStats();
+      _cachedGeneContext = `[GENE MEMORY -- ${genes.length} active genes injected]\n${geneLines}`;
+      _cachedGeneStats = `[Gene Network] total=${stats.total} | active=${stats.by_state.active} | topDeltaG=${stats.top_delta_g} | avgFitness=${stats.avg_fitness.toFixed(2)}`;
+    }
+    _lastGeneRefresh = now;
+  } catch (e) {
+    log.warn("agent.gene_context_refresh_failed", { err: String(e) });
+    _cachedGeneContext = "";
+  }
+  return _cachedGeneContext;
+}
+
+// ─── Singleton State ─────────────────────────────────────────────────────────
 
 let agent: Agent | undefined;
 let host: ReturnType<typeof createExtensionHost> | undefined;
@@ -40,25 +77,30 @@ function getHost(): ReturnType<typeof createExtensionHost> {
   return host;
 }
 
-/** Re-export the shared resolver so existing callers (e.g. tests) keep
- *  working. */
 export { resolveModel };
 
 export interface AgentOptions {
   model?: Model<any>;
   skills?: string[];
   system?: string;
+  geneQuery?: string;
 }
 
-/** Build (or return cached) Agent instance. */
+// ─── Agent Singleton ────────────────────────────────────────────────────────
+
 export function getAgent(opts: AgentOptions = {}): Agent {
   if (agent) return agent;
+
   const cfg = config();
   const h = getHost();
   const model = opts.model ?? resolveModel();
-  const systemPrompt = [INSTINCTS.join("\n\n"), opts.system ?? BASE_PROMPT, (opts.skills ?? []).join("\n\n")]
-    .filter(Boolean)
-    .join("\n\n");
+
+  const systemPrompt = [
+    INSTINCTS.join("\n\n"),
+    opts.system ?? BASE_PROMPT,
+    (opts.skills ?? []).join("\n\n"),
+  ].filter(Boolean).join("\n\n");
+
   agent = new Agent({
     initialState: {
       systemPrompt,
@@ -68,9 +110,6 @@ export function getAgent(opts: AgentOptions = {}): Agent {
     },
   });
 
-  // Self-repair: when a tool returns isError, log the failure into memory
-  // as a `procedural` anti-pattern. The dreamer sweep will eventually
-  // promote repeated patterns into `semantic` knowledge.
   agent.subscribe(async (ev: AgentEvent) => {
     if (ev.type === "tool_execution_end" && (ev as { isError?: boolean }).isError) {
       const store = getStore();
@@ -86,20 +125,36 @@ export function getAgent(opts: AgentOptions = {}): Agent {
         log.warn("agent.error.log.fail", { err: (err as Error).message });
       }
     }
+
+    if (ev.type === "turn_end") {
+      const turnEv = ev as { toolResults?: Array<{ toolName: string }> };
+      const toolCount = turnEv.toolResults?.length ?? 0;
+      recordDeltaG(toolCount * 5);
+      apexSpiralTick(toolCount * 5).catch(e => {
+        log.debug("agent.apex_spiral_tick_err", { err: String(e) });
+      });
+    }
   });
 
-  log.info("agent.init", { model: `${cfg.llm.provider}/${cfg.llm.model}`, tools: h.tools().length });
+  _refreshGeneContext(opts.geneQuery ?? "").catch(e => {
+    log.warn("agent.gene_cache_warm_failed", { err: String(e) });
+  });
+
+  log.info("agent.init", {
+    model: `${cfg.llm.provider}/${cfg.llm.model}`,
+    tools: h.tools().length,
+    geneInjection: true,
+  });
+
   return agent;
 }
 
-/** Reset the agent + extensions (test helper). */
 export function resetAgentForTests(): void {
   agent = undefined;
   host = undefined;
   bootstrapped = false;
 }
 
-/** Tear down everything for graceful shutdown. */
 export function shutdown(): void {
   bootstrapShutdown();
   agent = undefined;
@@ -107,7 +162,6 @@ export function shutdown(): void {
   bootstrapped = false;
 }
 
-/** Async-iterator wrapper around the Agent's event stream. */
 export async function* streamAgent(prompt: string, opts: AgentOptions = {}): AsyncIterable<AgentEvent> {
   const a = getAgent(opts);
   const queue: AgentEvent[] = [];
@@ -124,7 +178,6 @@ export async function* streamAgent(prompt: string, opts: AgentOptions = {}): Asy
     }
   });
   try {
-    // Kick off the prompt in the background.
     a.prompt(prompt).catch((e: Error) => log.error("agent.prompt.err", { err: (e as Error).message }));
     while (true) {
       if (queue.length) {

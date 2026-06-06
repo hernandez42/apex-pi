@@ -21,6 +21,7 @@ export interface AppContext {
 let booted = false;
 let ctx: AppContext | undefined;
 let dreamer: Dreamer | undefined;
+export function getDreamer(): Dreamer | undefined { return dreamer; }
 
 export function boot(): AppContext {
   if (booted && ctx) return ctx;

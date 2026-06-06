@@ -60,6 +60,9 @@ async function startHttp(): Promise<void> {
 
 async function startFeishuWS(): Promise<void> {
   boot();
+  const { getAgent } = await import("./agent.ts");
+  const { wireEvo } = await import("./evo/wiring.ts");
+  await wireEvo(getAgent);
   const { createFeishuMom } = await import("./channels/feishu.ts");
   const mom = createFeishuMom({
     useCard: config().feishu.useCard,
