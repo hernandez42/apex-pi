@@ -207,6 +207,12 @@ function computeTrend(buffer: number[]): "rising" | "falling" | "stable" {
 export async function apexSpiralTick(currentDeltaG?: number): Promise<ApexSpiralState> {
   _tick++;
 
+  // ── P1 FIX: NaN/Infinity 防护 ──────────────────────────────────────────
+  if (currentDeltaG !== undefined && (!Number.isFinite(currentDeltaG) || Number.isNaN(currentDeltaG))) {
+    log.warn("apex_spiral.invalid_deltaG", { currentDeltaG, tick: _tick });
+    currentDeltaG = undefined; // 跳过这次记录
+  }
+
   // 1. 记录ΔG
   if (currentDeltaG !== undefined) {
     _deltaGBuffer.push(currentDeltaG);

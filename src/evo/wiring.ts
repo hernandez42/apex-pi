@@ -15,7 +15,7 @@ import { boot } from "../bootstrap.ts";
 import { onTurnComplete } from "./background-review.ts";
 import { sparkRippleTick } from "./moss.ts";
 import { apexSpiralTick } from "./apex_spiral.ts";
-import { evolveNetwork } from "./gene_network.ts";
+import { evolveNetwork, loadFromMemory } from "./gene_network.ts";
 import { scanForFailures, runEvolutionPipeline, loadStore } from "./pipeline.ts";
 import { log } from "../log.ts";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
@@ -177,6 +177,13 @@ async function _doWire(
   getAgentFn: () => import("@earendil-works/pi-agent-core").Agent
 ): Promise<void> {
   log.info("evo.wiring.start");
+  // ── P0 FIX: 基因网络初始化（从未被调用！导致 _genes Map 永远为空）────
+  try {
+    await loadFromMemory();
+    log.info("evo.wiring.loadFromMemory.ok");
+  } catch (e) {
+    log.warn("evo.wiring.loadFromMemory.failed", { err: String(e) });
+  }
   await wireDreamerToCurator();
   wireAgentToEvo(getAgentFn);
   startEvolutionScan();

@@ -20,16 +20,55 @@ export function calculateDeltaG(input: {
   userMessage: string;
   assistantMessage: string;
   toolIterations: number;
+  toolNames?: string[];
+  responseLength?: number;
+  elapsedMs?: number;
+  domainsTouched?: number;
 }): number {
-  // 简化的 ΔG 计算：基于工具调用次数和消息长度
+  // P1 FIX: 兼容background-review.ts传递的扩展参数
   const textLength = (input.userMessage + input.assistantMessage).length;
   const toolBonus = input.toolIterations * 5;
+  const domainBonus = (input.domainsTouched ?? 0) * 3;
+  const lengthBonus = Math.floor((input.responseLength ?? textLength) / 200);
   const complexity = Math.log(textLength + 1) * 2;
-  const deltaG = Math.max(1, Math.floor(complexity + toolBonus));
+  const deltaG = Math.max(1, Math.floor(complexity + toolBonus + domainBonus + lengthBonus));
   return deltaG;
 }
 
-export async function writeGene(content: string, delta_g: number): Promise<{ gene_id: string }> {
-  // 占位：基因写入到基因网络
-  return { gene_id: `moss_${Date.now()}` };
+// ─── writeGene 实现（真实写入基因网络）──────────────────────────────────
+export async function writeGene(params: {
+  userMessage?: string;
+  assistantMessage?: string;
+  content?: string;
+  delta_g: number;
+  toolIterations?: number;
+  toolNames?: string[];
+}): Promise<{ gene_id: string }> {
+  // P1 FIX: 真实实现，写入基因网络
+  try {
+    const { addGene, persistToMemory, GeneRecord } = await import("./gene_network.ts");
+    const geneContent = params.content
+      ?? `[moss gene] toolIterations=${params.toolIterations ?? 0}, delta_g=${params.delta_g}`;
+    const gene: GeneRecord = {
+      gene_id: `moss_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      content: geneContent,
+      delta_g: params.delta_g,
+      fitness: 0.5,
+      generation: 0,
+      parent_gene_ids: [],
+      created_at: new Date().toISOString(),
+      last_expressed_at: new Date().toISOString(),
+      expression_count: 0,
+      state: "candidate",
+      tags: ["moss", "spark_ripple"],
+      connections_in: 0,
+      connections_out: 0,
+    };
+    addGene(gene);
+    await persistToMemory(gene);
+    return { gene_id: gene.gene_id };
+  } catch (e) {
+    console.debug(`XUANJI writeGene err: ${e}`);
+    return { gene_id: `moss_err_${Date.now()}` };
+  }
 }

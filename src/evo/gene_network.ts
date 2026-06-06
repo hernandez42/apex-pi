@@ -18,6 +18,7 @@
  */
 
 import { boot } from "../bootstrap.ts";
+import { Database } from "bun:sqlite";
 import { log } from "../log.ts";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -393,9 +394,9 @@ export async function evolveNetwork(): Promise<{
  * 真实持久化到 SQLite，不依赖 5D Memory engine
  * 使用 bun:sqlite 直接写基因数据库
  */
-let _geneDb: import("bun").sqliteDB | null = null;
+let _geneDb: ReturnType<typeof Database> | null = null;
 
-function getGeneDb(): import("bun").sqliteDB {
+function getGeneDb(): ReturnType<typeof Database> {
   if (_geneDb) return _geneDb;
   const dbPath = boot().config?.dataDir
     ? boot().config.dataDir + "/gene_network.sqlite"
@@ -405,7 +406,7 @@ function getGeneDb(): import("bun").sqliteDB {
     : {} as import("bun").sqliteDB;
   // Init schema
   try {
-    (_geneDb as unknown as { run: (sql: string) => void }).run(`
+    _geneDb.run(`
       CREATE TABLE IF NOT EXISTS genes (
         gene_id TEXT PRIMARY KEY,
         content TEXT,
